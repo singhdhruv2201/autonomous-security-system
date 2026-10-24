@@ -20,7 +20,7 @@ def test_openapi_exposes_only_read_endpoints(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert set(paths) == {
         "/company", "/teams", "/teams/{team_id}",
-        "/employees", "/employees/{employee_id}", "/health",
+        "/employees", "/employees/{employee_id}", "/health", "/snapshot",
     }
     assert all(set(operations) == {"get"} for operations in paths.values())
 
@@ -68,7 +68,7 @@ def test_unknown_resource_errors(client, path, detail):
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
 @pytest.mark.parametrize("path", [
     "/company", "/teams", "/teams/sales", "/employees",
-    "/employees/emp-maya-chen", "/health",
+    "/employees/emp-maya-chen", "/health", "/snapshot",
 ])
 def test_all_directory_routes_reject_writes_without_changing_state(client, directory, method, path):
     before = (directory.teams(), directory.employees())

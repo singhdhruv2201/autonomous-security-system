@@ -66,6 +66,10 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             db.execute("SELECT COUNT(*) FROM teams").fetchone()
         return {"status": "ok"}
 
+    @app.get("/snapshot", tags=["Directory"])
+    def snapshot():
+        return directory.snapshot()
+
     @app.get("/company", tags=["Directory"])
     def company():
         teams = directory.teams()

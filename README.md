@@ -1,20 +1,58 @@
 # Helio company simulator
 
-First milestone: a persistent, fictional company directory. Five teams, twenty
-employees, and read-only APIs. Applications, agents, permission grants, Neo4j,
-the security backend, dashboard, and Slack are later milestones.
+A fictional company with a persistent directory (five teams, twenty employees)
+and a working Sales CRM. The CRM has its own database, enforced bearer-token
+permissions, six synthetic customers, an audit trail, and a Sales Research Agent
+that runs in a separate container and makes actual HTTP requests.
+
+The separate security backend now observes the directory and CRM through their
+APIs and builds a Neo4j company graph. Dashboard, Slack, and automated remediation
+remain later milestones. See [graph architecture and walkthrough](docs/graph.md).
 
 ## Start with Docker
 
 ```sh
-docker compose up --build -d --wait
+make setup
+make up
+make graph-sync
 ```
 
-Open **http://localhost:8000/docs** to explore the API. The root URL also redirects
-to these interactive docs. Data is seeded on first startup and stored in the
-`company-data` Docker volume. Restarting does not reset employees or duplicate
-records. The container port is bound to localhost only; this unauthenticated
-synthetic-data service is not intended for public exposure.
+Open **http://localhost:8000/docs** for the directory or
+**http://localhost:8001/docs** for the CRM API explorer. There is no custom UI yet.
+`make setup` generates four distinct CRM credentials and a Neo4j password in a local `.env` file
+with owner-only permissions. It preserves existing credentials on repeat runs.
+The file is excluded from Git and Docker build contexts; there is no committed
+credential template. Never share it or the output of `docker compose config`
+without `--quiet`, which can expand credentials.
+
+Data is seeded on first startup into separate `company-data`, `crm-data`, and
+`security-graph-data` volumes. Restarting preserves state. All published ports are bound to localhost;
+this development environment is not intended for public exposure.
+
+Neo4j Browser is available at **http://localhost:7474/browser/**. Connect to
+`bolt://localhost:7687` as `neo4j`, using `NEO4J_PASSWORD` from your local `.env`.
+Use `make graph-sync` to refresh observations, `make graph-status` for freshness
+and counts, and `make graph-risks` for the inactive-agent-owner rule. Synchronization
+is explicit; the graph does not yet update continuously.
+
+## CRM demo
+
+```sh
+make agent              # Reads six synthetic customers and prints a summary
+make update-customer    # Maya updates a customer note using her write grant
+make offboard           # Mark Maya inactive in the company directory
+make agent              # Still succeeds: the agent has a separate credential
+make grants             # Inspect ownership, scopes, status, and versions
+make revoke-agent       # Administrator revokes the agent's access grant
+make agent              # Expected failure: HTTP 403, exit code 2 from agent
+make audit              # Inspect recorded reads, writes, denials, and revocation
+```
+
+The `make` command may also exit 2 when a recipe fails; the agent itself exits 2
+for access denial. It exits 1 for configuration/network errors.
+The walkthrough intentionally leaves Maya inactive and the grant revoked.
+See [CRM details and reset instructions](docs/crm.md) for the access model,
+API contract, and how to repeat the scenario with fresh CRM data.
 
 ```sh
 docker compose stop       # Stop while preserving company state
@@ -40,8 +78,8 @@ docker compose up -d --wait
 
 All employees start active. Names and addresses are synthetic; emails use the
 reserved `helio.example` domain. Maya Chen (`emp-maya-chen`) is a sales account
-executive and the future offboarding scenario's subject. No offboarding behavior
-has been added yet.
+executive and the offboarding scenario's subject. A local operator command changes
+employment status; the directory's HTTP endpoints remain read-only.
 
 An employee has a stable ID, name, email, team ID, job title, employment status,
 and team-lead flag. Team membership has a database foreign key, and a team cannot
@@ -59,6 +97,7 @@ not grant security-platform approval permissions.
 | GET | `/employees?team_id=sales&status=active` | Filtered directory |
 | GET | `/employees/emp-maya-chen` | One employee |
 | GET | `/health` | Database connectivity check |
+| GET | `/snapshot` | Complete teams/employees snapshot from one transaction |
 
 Unknown employees or teams return 404, and unsupported status filters return 422.
 Team counts include both active and inactive employees. IDs stay stable across
@@ -78,6 +117,7 @@ Python 3.11+ is required. Docker provides Python without a host installation.
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.lock
 .venv/bin/python -m pytest -q
+make test-integration  # Complete suite including real Neo4j; requires make up
 PYTHONPATH=src .venv/bin/python -m uvicorn helio_simulator.api:app --reload --host 127.0.0.1
 ```
 
@@ -102,6 +142,8 @@ are pinned in `requirements-dev.lock`. To deliberately refresh these locks:
 - `tests/test_directory.py`: membership, filters, restart persistence, constraints,
   and read-only API checks.
 
-The directory will be one source for the eventual company graph. It is not the
-security platform, and it does not pretend that external vendor applications are
-already connected.
+The directory is the authority for employment status in the company graph. The CRM is our
+own small business application, not a connection to Salesforce or another vendor.
+The graph can identify an inactive employee's agent with an active grant to
+confidential data. Revocation still requires an operator in the CRM. Automated
+investigation and approval belong to a later security-platform milestone.

@@ -1,6 +1,6 @@
 .venv
 .git
-.env
+.env*
 data
 work
 __pycache__

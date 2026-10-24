@@ -7,7 +7,7 @@ name = "helio-simulator"
 version = "0.1.0"
 description = "Synthetic company directory for the Helio security simulator"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "neo4j>=5.26,<6"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
@@ -18,3 +18,4 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["neo4j: requires a running Neo4j instance and NEO4J_TEST_URI"]

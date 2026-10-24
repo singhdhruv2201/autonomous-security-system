@@ -18,12 +18,16 @@ h11==0.16.0
     # via uvicorn
 idna==3.20
     # via anyio
+neo4j==5.28.8
+    # via helio-simulator (pyproject.toml)
 opentelemetry-api==1.45.1
     # via fastapi
 pydantic==2.14.1
     # via fastapi
 pydantic-core==2.50.1
     # via pydantic
+pytz==2026.5
+    # via neo4j
 starlette==1.9.0
     # via fastapi
 typing-extensions==4.16.0

@@ -93,6 +93,16 @@ class Directory:
         db.execute("ALTER TABLE teams_v2 RENAME TO teams")
         db.execute("ALTER TABLE employees_v2 RENAME TO employees")
 
+    def set_employee_status(self, employee_id, status):
+        """Explicit local HR action; independent applications are not provisioned here."""
+        if status not in ("active", "inactive"):
+            raise ValueError("Status must be active or inactive")
+        with self.connection() as db:
+            result = db.execute("UPDATE employees SET status=? WHERE id=?", (status, employee_id))
+            if result.rowcount == 0:
+                raise KeyError(employee_id)
+            return dict(db.execute("SELECT * FROM employees WHERE id=?", (employee_id,)).fetchone())
+
     def teams(self):
         with self.connection() as db:
             return [dict(row) for row in db.execute("""
@@ -113,3 +123,11 @@ class Directory:
             return [dict(row) for row in db.execute(
                 "SELECT * FROM employees" + where + " ORDER BY name", values
             )]
+
+    def snapshot(self):
+        """One transaction prevents torn employee/team observations."""
+        with self.connection() as db:
+            db.execute("BEGIN")
+            return {"schema_version": 1, "company_id": "helio", "complete": True,
+                    "teams": [dict(r) for r in db.execute("SELECT * FROM teams ORDER BY id")],
+                    "employees": [dict(r) for r in db.execute("SELECT * FROM employees ORDER BY id")]}
