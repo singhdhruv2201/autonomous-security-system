@@ -7,12 +7,6 @@ from helio_simulator.api import create_app
 from helio_simulator.directory import Directory
 
 
-@pytest.fixture
-def client(tmp_path):
-    with TestClient(create_app(tmp_path / "company.sqlite3")) as client:
-        yield client
-
-
 def test_company_has_expected_team_sizes_and_valid_leads(client):
     assert client.get("/company").json() == {
         "id": "helio", "name": "Helio", "synthetic": True,

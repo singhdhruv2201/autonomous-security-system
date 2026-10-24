@@ -30,25 +30,17 @@ class Directory:
             db.execute("""CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY, value TEXT NOT NULL
             )""")
-            db.execute("""CREATE TABLE IF NOT EXISTS teams (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL
-            )""")
-            db.execute("""CREATE TABLE IF NOT EXISTS employees (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
-                team_id TEXT NOT NULL REFERENCES teams(id),
-                title TEXT NOT NULL,
-                status TEXT NOT NULL CHECK(status IN ('active', 'inactive')),
-                is_team_lead INTEGER NOT NULL CHECK(is_team_lead IN (0, 1))
-            )""")
-            db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_lead_per_team
-                ON employees(team_id) WHERE is_team_lead = 1""")
             version = db.execute(
                 "SELECT value FROM metadata WHERE key = 'schema_version'"
             ).fetchone()
-            if version and version["value"] != "1":
+            if version and version["value"] not in ("1", "2"):
                 raise RuntimeError("Unsupported directory schema version")
+            if version and version["value"] == "1":
+                self._migrate_non_null_ids(db)
+            else:
+                self._create_tables(db)
+            db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_lead_per_team
+                ON employees(team_id) WHERE is_team_lead = 1""")
             seeded = db.execute(
                 "SELECT value FROM metadata WHERE key = 'seed_version'"
             ).fetchone()
@@ -64,8 +56,42 @@ class Directory:
                 )
                 db.execute("INSERT INTO metadata VALUES ('seed_version', '1')")
             db.execute(
-                "INSERT OR IGNORE INTO metadata VALUES ('schema_version', '1')"
+                "INSERT OR REPLACE INTO metadata VALUES ('schema_version', '2')"
             )
+
+    @staticmethod
+    def _create_tables(db, suffix=""):
+        # The suffix is an internal migration constant, never external input.
+        db.execute(f"""CREATE TABLE IF NOT EXISTS teams{suffix} (
+            id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL
+        )""")
+        db.execute(f"""CREATE TABLE IF NOT EXISTS employees{suffix} (
+            id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            team_id TEXT NOT NULL REFERENCES teams{suffix}(id),
+            title TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('active', 'inactive')),
+            is_team_lead INTEGER NOT NULL CHECK(is_team_lead IN (0, 1))
+        )""")
+
+    def _migrate_non_null_ids(self, db):
+        # Refuse invalid legacy data instead of deleting records or inventing IDs.
+        for table in ("teams", "employees"):
+            if db.execute(f"SELECT 1 FROM {table} WHERE id IS NULL LIMIT 1").fetchone():
+                raise RuntimeError(
+                    f"Cannot migrate directory: {table} contains NULL IDs; "
+                    "repair those records before restarting"
+                )
+        # Rebuild both related tables inside initialize's transaction. Copy the
+        # parent first and drop the child first to keep foreign keys enabled.
+        self._create_tables(db, suffix="_v2")
+        db.execute("INSERT INTO teams_v2 SELECT * FROM teams")
+        db.execute("INSERT INTO employees_v2 SELECT * FROM employees")
+        db.execute("DROP TABLE employees")
+        db.execute("DROP TABLE teams")
+        db.execute("ALTER TABLE teams_v2 RENAME TO teams")
+        db.execute("ALTER TABLE employees_v2 RENAME TO employees")
 
     def teams(self):
         with self.connection() as db:
