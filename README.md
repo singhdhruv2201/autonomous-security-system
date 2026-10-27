@@ -5,35 +5,40 @@ and a working Sales CRM. The CRM has its own database, enforced bearer-token
 permissions, six synthetic customers, an audit trail, and a Sales Research Agent
 that runs in a separate container and makes actual HTTP requests.
 
-The separate security backend now observes the directory and CRM through their
-APIs and builds a Neo4j company graph. Dashboard, Slack, and automated remediation
-remain later milestones. See [graph architecture and walkthrough](docs/graph.md).
+The separate security backend observes the directory and CRM through their APIs,
+builds a Neo4j company graph, and persists security findings. Its authenticated
+API runs on port 8002 with a background observation worker. Dashboard, AI
+investigation, Slack, and automated remediation remain later milestones.
+See [security API and workflow](docs/backend.md) and [graph walkthrough](docs/graph.md).
 
 ## Start with Docker
 
 ```sh
 make setup
 make up
-make graph-sync
+make security-overview
 ```
 
 Open **http://localhost:8000/docs** for the directory or
-**http://localhost:8001/docs** for the CRM API explorer. There is no custom UI yet.
-`make setup` generates four distinct CRM credentials and a Neo4j password in a local `.env` file
+**http://localhost:8001/docs** for the CRM API explorer, or
+**http://localhost:8002/docs** for the security platform API. There is no custom UI yet.
+`make setup` generates four CRM credentials, two security API tokens, and a Neo4j password in a local `.env` file
 with owner-only permissions. It preserves existing credentials on repeat runs.
 The file is excluded from Git and Docker build contexts; there is no committed
 credential template. Never share it or the output of `docker compose config`
 without `--quiet`, which can expand credentials.
 
 Data is seeded on first startup into separate `company-data`, `crm-data`, and
-`security-graph-data` volumes. Restarting preserves state. All published ports are bound to localhost;
+`security-graph-data` volumes, plus `security-state` for findings and job history.
+Restarting preserves state. All published ports are bound to localhost;
 this development environment is not intended for public exposure.
 
 Neo4j Browser is available at **http://localhost:7474/browser/**. Connect to
 `bolt://localhost:7687` as `neo4j`, using `NEO4J_PASSWORD` from your local `.env`.
-Use `make graph-sync` to refresh observations, `make graph-status` for freshness
-and counts, and `make graph-risks` for the inactive-agent-owner rule. Synchronization
-is explicit; the graph does not yet update continuously.
+The security worker refreshes observations every 60 seconds. Use `make security-sync`
+to queue an additional refresh, `make security-runs` to track it, and
+`make security-findings` to view persisted risks. The older `make graph-sync`,
+`make graph-status`, and `make graph-risks` commands remain graph-only diagnostics.
 
 ## CRM demo
 

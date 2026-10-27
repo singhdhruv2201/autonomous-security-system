@@ -42,3 +42,7 @@ graph-risks:
 
 test-integration:
 	@.venv/bin/python -c 'import os; from pathlib import Path; import pytest; values=dict(line.split("=",1) for line in Path(".env").read_text().splitlines() if "=" in line and not line.lstrip().startswith("#")); os.environ["NEO4J_PASSWORD"]=values["NEO4J_PASSWORD"]; os.environ["NEO4J_TEST_URI"]="bolt://127.0.0.1:7687"; raise SystemExit(pytest.main(["-q"]))'
+
+.PHONY: security-overview security-findings security-connectors security-runs security-sync security-audit
+security-overview security-findings security-connectors security-runs security-sync security-audit:
+	docker compose exec -T security-api python -m helio_security.client $(patsubst security-%,%,$@)

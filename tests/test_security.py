@@ -145,6 +145,34 @@ def test_setup_is_private_repeatable_and_preserves_all_secrets(tmp_path):
     setup(path)
     assert path.read_text() == first
     entries = dict(line.split("=", 1) for line in first.splitlines() if "=" in line)
-    assert len(entries) == 5 and len(set(entries.values())) == 5
+    assert len(entries) == 7 and len(set(entries.values())) == 7
+    assert len(entries["SECURITY_OPERATOR_TOKEN"]) >= 32
+    assert len(entries["SECURITY_VIEWER_TOKEN"]) >= 32
     assert len(entries["NEO4J_PASSWORD"]) >= 32
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_setup_adds_api_tokens_without_rotating_existing_environment(tmp_path):
+    from helio_crm.credentials import generate_credentials
+    path = tmp_path / ".env"
+    generate_credentials(path)
+    with path.open("a") as output:
+        output.write("NEO4J_PASSWORD=preserve-existing-graph-password\n")
+    before = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+    setup(path)
+    after = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+    assert all(after[k] == v for k, v in before.items())
+    assert len(after) == 7
+
+
+def test_setup_rejects_invalid_existing_platform_token_without_rotating_it(tmp_path):
+    path = tmp_path / ".env"
+    setup(path)
+    content = path.read_text()
+    lines = ["SECURITY_VIEWER_TOKEN=short" if line.startswith("SECURITY_VIEWER_TOKEN=") else line
+             for line in content.splitlines()]
+    path.write_text("\n".join(lines) + "\n")
+    before = path.read_text()
+    with pytest.raises(ValueError):
+        setup(path)
+    assert path.read_text() == before

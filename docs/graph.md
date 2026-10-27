@@ -1,8 +1,9 @@
 # Company security graph
 
 Neo4j belongs to the security platform. The simulator represents the customer
-environment. The future dashboard and Slack interface will call the platform's
-backend; they will not connect directly to the graph database or carry CRM
+environment. The security API and worker are now implemented; see the
+[backend workflow](backend.md). The future dashboard and Slack interface will call
+that backend; they will not connect directly to the graph database or carry CRM
 administration credentials.
 
 ```mermaid
@@ -21,8 +22,9 @@ flowchart LR
     CRM -->|observer metadata snapshot| Connectors
 ```
 
-The services currently share one local Compose network for convenience. They use
-separate data volumes. The `graph-sync` container has no customer database mounts
+The services use separate customer and platform Compose networks and data volumes.
+Only the API/worker and diagnostic connector container join both networks.
+The `graph-sync` container has no customer database mounts
 and receives only the observer token and graph credentials. It cannot edit
 customers or revoke access through the CRM. Neo4j and both source APIs publish
 only to localhost.
@@ -106,8 +108,9 @@ relationships**: 20 employees, 5 teams, 1 app, 20 app accounts, 1 agent,
   are stale even if the last attempt succeeded. Newer observations cannot be
   overwritten by older requests finishing late.
 
-There is no automatic sync scheduler yet. Run `make graph-sync` after changing
-source state and before relying on a graph view. Reads are atomic within each
+The security API worker automatically synchronizes every 60 seconds by default.
+Use `make security-sync` to queue a refresh and update persistent findings.
+`make graph-sync` remains a graph-only diagnostic. Reads are atomic within each
 source, not across both sources. Each source's observation time stays visible.
 
 ## Demonstrated security value
@@ -143,9 +146,11 @@ This is a single-company development backend. Company-key scoping is tested,
 but production tenant authorization, identity federation, dedicated service
 credentials for Neo4j, TLS, secret rotation and deployment isolation are future
 work. The local directory API is intentionally unauthenticated. There is no LLM,
-continuous discovery, automatic remediation, dashboard or Slack workflow yet.
-The graph retains latest known state and first/last observation times, not a full
-event history; it cannot recover changes that happened before observation.
+activity-stream ingestion, automatic remediation, dashboard or Slack workflow yet.
+Scheduled metadata observation is implemented. The graph retains latest known
+state and first/last observation times; the platform additionally stores finding
+transition evidence. Neither is a complete activity history, and neither can
+recover changes that happened before observation.
 
 The deployment and transaction model follow the official
 [Neo4j Docker guide](https://neo4j.com/docs/operations-manual/current/docker/introduction/)

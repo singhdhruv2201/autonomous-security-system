@@ -125,6 +125,7 @@ class GraphStore:
             MATCH p=(e:Employee {company_id:$company,status:'inactive'})-[:OWNS]->(a:Agent)
                 -[:HAS_GRANT]->(g:AccessGrant {status:'active'})-[:ON]->(d:DataResource)
             WHERE d.classification='confidential'
+                AND any(scope IN g.scopes WHERE scope IN ['customers:read','customers:write'])
                 AND all(n IN nodes(p) WHERE n.present=true AND n.company_id=$company)
                 AND all(r IN relationships(p) WHERE r.present=true)
             RETURN e.id AS employee_id, e.name AS employee_name, a.id AS agent_id,
