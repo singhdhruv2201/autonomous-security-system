@@ -19,7 +19,8 @@ flowchart LR
         API[Security API :8002] --> Graph
         API --> State
         API -->|queue refresh| Worker
-        Client[Future dashboard / security agent / Slack] -.-> API
+        Dashboard[Dashboard gateway :3000] --> API
+        Client[Future AI investigator / Slack] -.-> API
     end
     Directory -->|read-only HTTP| Worker
     CRM -->|observer metadata only| Worker
@@ -152,7 +153,7 @@ worker run reconciles any graph-only changes.
 The credentials represent local viewer/operator roles, not individual human
 identities. Production SSO, per-user audit identity, tenant provisioning,
 distributed workers, retention policies, and deployment hardening remain future
-work. Source activity ingestion, AI investigation, dashboard, Slack approval,
+work. The [local dashboard](dashboard.md) is implemented. Source activity ingestion, AI investigation, Slack approval,
 and verified remediation are separate upcoming milestones. The platform's CRM
 observer cannot execute remediation even if asked to do so.
 

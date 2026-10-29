@@ -31,7 +31,7 @@ def auth(settings, role="operator"):
 
 
 @pytest.mark.parametrize("path", ["/overview", "/entities", "/entities/missing", "/entities/missing/relationships",
-                                   "/graph", "/connectors", "/findings", "/findings/missing", "/sync-runs", "/sync-runs/missing", "/audit"])
+                                   "/graph", "/connectors", "/policies", "/findings", "/findings/missing", "/sync-runs", "/sync-runs/missing", "/audit"])
 def test_data_endpoints_require_authentication(api, path):
     client, settings, *_ = api
     assert client.get(path).status_code == 401
@@ -103,3 +103,16 @@ def test_settings_require_distinct_strong_tokens_without_exposing_them():
         Settings(operator_token=token, viewer_token=token, observer_token=token)
     with pytest.raises(ValueError):
         Settings(operator_token="short", viewer_token=token, observer_token=secrets.token_urlsafe(32))
+
+
+def test_dashboard_capabilities_and_policy_describe_actual_observation(api):
+    client, settings, *_ = api
+    overview = client.get("/overview", headers=auth(settings, "viewer")).json()
+    assert overview["observation"] == {"interval_seconds": 0, "agentic": False,
+        "activity_ingestion": False, "remediation_enabled": False}
+    response = client.get("/policies", headers=auth(settings, "viewer"))
+    assert response.status_code == 200
+    policy = response.json()["items"][0]
+    assert policy["id"] == "inactive_owner_agent_access" and policy["enabled"] is True
+    assert policy["sources"] == ["directory", "crm"]
+    assert policy["severity"] == "high" and len(policy["conditions"]) == 4

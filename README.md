@@ -7,9 +7,10 @@ that runs in a separate container and makes actual HTTP requests.
 
 The separate security backend observes the directory and CRM through their APIs,
 builds a Neo4j company graph, and persists security findings. Its authenticated
-API runs on port 8002 with a background observation worker. Dashboard, AI
-investigation, Slack, and automated remediation remain later milestones.
-See [security API and workflow](docs/backend.md) and [graph walkthrough](docs/graph.md).
+API runs on port 8002 with a background observation worker. The Awasi dashboard
+on port 3000 shows company security, the graph, agents, apps, policies, and findings.
+AI investigation, Slack, and automated remediation remain later milestones.
+See [dashboard guide](docs/dashboard.md), [security API and workflow](docs/backend.md) and [graph walkthrough](docs/graph.md).
 
 ## Start with Docker
 
@@ -19,9 +20,10 @@ make up
 make security-overview
 ```
 
-Open **http://localhost:8000/docs** for the directory or
+Open **http://localhost:3000** for the Awasi dashboard.
+Use **http://localhost:8000/docs** for the directory or
 **http://localhost:8001/docs** for the CRM API explorer, or
-**http://localhost:8002/docs** for the security platform API. There is no custom UI yet.
+**http://localhost:8002/docs** for the security platform API.
 `make setup` generates four CRM credentials, two security API tokens, and a Neo4j password in a local `.env` file
 with owner-only permissions. It preserves existing credentials on repeat runs.
 The file is excluded from Git and Docker build contexts; there is no committed

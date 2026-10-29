@@ -19,6 +19,7 @@ from .platform_store import PlatformStore
 from .reader import GraphReader
 from .settings import Settings
 from .worker import ObservationWorker
+from .rules import RULE_ID
 
 bearer = HTTPBearer(auto_error=False)
 Limit = Annotated[int, Query(ge=1, le=200)]
@@ -114,9 +115,22 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
     def overview(identity=Depends(principal), service=Depends(services)):
         company = identity["company_id"]
         return {**service.graph.status(),
+                "observation": {"interval_seconds": service.settings.sync_interval, "agentic": False,
+                                "activity_ingestion": False, "remediation_enabled": False},
                 "finding_counts": {state: service.store.findings(company, status=state, limit=1)["total"]
                                    for state in ("open", "resolved")},
                 "latest_sync_run": next(iter(service.store.runs(company, limit=1)["items"]), None)}
+
+    @app.get("/policies", tags=["Observation"])
+    def policies(identity=Depends(principal), service=Depends(services)):
+        return {"company_id": identity["company_id"], "items": [{"id": RULE_ID,
+            "name": "Inactive owner with agent access", "enabled": True, "severity": "high",
+            "description": "Detect an agent that retains customer access after its owner becomes inactive.",
+            "sources": ["directory", "crm"], "mode": "Observe and flag",
+            "conditions": ["Owner is inactive", "Agent has an active grant", "Grant permits customer read or write",
+                           "Target resource is confidential"],
+            "suggested_fix": "Review ownership and revoke the affected CRM grant if access is no longer required.",
+            "coverage": "Requires fresh directory and CRM evidence. Missing evidence never resolves a finding."}]}
 
     @app.get("/connectors", tags=["Observation"])
     def connectors(identity=Depends(principal), service=Depends(services)):

@@ -120,6 +120,26 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
+  dashboard:
+    build: .
+    image: helio-simulator:local
+    command: ["uvicorn", "helio_dashboard.api:app", "--host", "0.0.0.0", "--port", "3000"]
+    networks: [platform]
+    environment:
+      SECURITY_API_URL: http://security-api:8002
+      SECURITY_OPERATOR_TOKEN: ${SECURITY_OPERATOR_TOKEN:?Run make setup first}
+      SECURITY_VIEWER_TOKEN: ${SECURITY_VIEWER_TOKEN:?Run make setup first}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      security-api:
+        condition: service_healthy
+    read_only: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 volumes:
   company-data:
   crm-data:

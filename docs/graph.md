@@ -2,9 +2,9 @@
 
 Neo4j belongs to the security platform. The simulator represents the customer
 environment. The security API and worker are now implemented; see the
-[backend workflow](backend.md). The future dashboard and Slack interface will call
-that backend; they will not connect directly to the graph database or carry CRM
-administration credentials.
+[backend workflow](backend.md). The [dashboard](dashboard.md) calls that backend
+through a server-side gateway. It does not connect directly to the graph database
+or carry CRM administration credentials. Slack integration remains future work.
 
 ```mermaid
 flowchart LR
@@ -16,7 +16,8 @@ flowchart LR
     subgraph Platform[Security platform]
         Connectors[Read-only API connectors] --> Graph[(Neo4j)]
         Graph --> Rule[Inactive owner access rule]
-        Rule -. later .-> Backend[Dashboard and Slack API]
+        Rule --> Backend[Security API]
+        Dashboard[Dashboard gateway :3000] --> Backend
     end
     Directory -->|complete directory snapshot| Connectors
     CRM -->|observer metadata snapshot| Connectors
@@ -60,7 +61,8 @@ RETURN p;
 Click nodes and relationships to inspect status, scopes, source and timestamps.
 Timestamps are UTC Unix seconds; Cypher can render one with
 `datetime({epochMillis:toInteger(n.last_observed_at * 1000)})`.
-Neo4j Browser is a development viewer; the product dashboard is not built yet.
+Neo4j Browser is a development viewer. The product graph view is available in
+the [dashboard](http://localhost:3000/#graph), with entity inspection and filtering.
 
 ## What is represented
 
@@ -146,7 +148,8 @@ This is a single-company development backend. Company-key scoping is tested,
 but production tenant authorization, identity federation, dedicated service
 credentials for Neo4j, TLS, secret rotation and deployment isolation are future
 work. The local directory API is intentionally unauthenticated. There is no LLM,
-activity-stream ingestion, automatic remediation, dashboard or Slack workflow yet.
+activity-stream ingestion, automatic remediation, or Slack workflow yet.
+The local dashboard visualizes the observed graph and persisted findings.
 Scheduled metadata observation is implemented. The graph retains latest known
 state and first/last observation times; the platform additionally stores finding
 transition evidence. Neither is a complete activity history, and neither can

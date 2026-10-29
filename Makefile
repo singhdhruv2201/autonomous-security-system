@@ -12,6 +12,10 @@ stop:
 test:
 	.venv/bin/python -m pytest -q
 
+.PHONY: test-ui
+test-ui:
+	node --test tests/frontend/*.test.mjs
+
 agent:
 	docker compose run --rm --no-deps sales-agent
 

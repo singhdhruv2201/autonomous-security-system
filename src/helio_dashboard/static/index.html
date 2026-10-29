@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#f4f3ed" />
+    <title>awasi — Helio Systems</title>
+    <meta
+      name="description"
+      content="Company security, connected. Explore Helio’s people, agents, apps and observed access risks."
+    />
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script type="module" src="/assets/app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar">
+      <a href="#dashboard" class="wordmark" aria-label="Awasi dashboard"
+        >awasi</a
+      >
+      <div class="company-control">
+        <button
+          id="company-toggle"
+          class="company-button"
+          aria-expanded="false"
+        >
+          <span class="helio-mark" aria-hidden="true"><i></i><b></b></span
+          ><span>Helio Systems</span
+          ><svg
+            viewBox="0 0 24 24"
+            width="16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+        </button>
+        <div id="company-menu" class="company-menu" hidden>
+          <strong>Helio Systems</strong><span>Company simulation</span
+          ><small>Connected to your local security platform</small>
+        </div>
+      </div>
+      <nav aria-label="Main navigation" id="navigation"></nav>
+      <div class="search-wrap">
+        <svg
+          viewBox="0 0 24 24"
+          width="18"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+        >
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="m16 16 5 5" /></svg
+        ><input
+          id="global-search"
+          aria-label="Search company entities"
+          placeholder="Search your company"
+          autocomplete="off"
+          role="combobox"
+          aria-expanded="false"
+          aria-controls="search-results"
+        /><kbd>⌘ K</kbd>
+        <div
+          id="search-results"
+          class="search-results"
+          role="listbox"
+          hidden
+        ></div>
+      </div>
+    </header>
+    <main id="main" tabindex="-1">
+      <div class="initial-loading">
+        <span class="spinner"></span> Connecting to your company…
+      </div>
+    </main>
+    <footer class="site-footer">
+      <span
+        ><span class="live-dot"></span> Helio Systems
+        <span class="separator">/</span> Security workspace</span
+      ><span>Built on observed evidence.</span>
+    </footer>
+    <div id="drawer-root"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>
