@@ -16,6 +16,10 @@ test:
 test-ui:
 	node --test tests/frontend/*.test.mjs
 
+.PHONY: benchmark-activity
+benchmark-activity:
+	PYTHONPATH=src .venv/bin/python -m helio_security.activity_benchmark run $(BENCHMARK_ARGS)
+
 agent:
 	docker compose run --rm --no-deps sales-agent
 

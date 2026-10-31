@@ -15,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .credentials import from_environment
 from .store import CRMError, CRMStore
+from .policies import PolicyConfig
+from .identity import IdentityProjection
 
 bearer = HTTPBearer(auto_error=False)
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
@@ -32,20 +34,29 @@ class RevokeRequest(BaseModel):
     expected_version: int = Field(ge=1, strict=True)
 
 
+class AccessChange(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_version: int = Field(ge=1, strict=True)
+    principal_status: Literal['active','disabled'] | None = None
+    credential_status: Literal['active','revoked'] | None = None
+    expires_at: float | None = Field(default=None,ge=0,allow_inf_nan=False)
+
+
 def load_directory():
     base = os.environ.get("HELIO_DIRECTORY_URL", "http://127.0.0.1:8000")
     with urllib.request.urlopen(base.rstrip("/") + "/employees", timeout=5) as response:
         return json.load(response)
 
 
-def create_app(db_path=None, tokens=None, employees_loader=None, *, activity_enabled=None):
+def create_app(db_path=None, tokens=None, employees_loader=None, *, activity_enabled=None, policy_config=None, clock=None):
     if activity_enabled is None:
         configured = os.getenv("CRM_ACTIVITY_ENABLED", "0")
         if configured not in {"0", "1"}:
             raise ValueError("CRM_ACTIVITY_ENABLED must be 0 or 1")
         activity_enabled = configured == "1"
     store = CRMStore(db_path or Path(os.getenv("CRM_DB_PATH", "data/crm.sqlite3")),
-                     activity_enabled=activity_enabled)
+                     activity_enabled=activity_enabled, policy_config=policy_config or PolicyConfig.from_environment(),
+                     **({'clock':clock} if clock else {}))
 
     @asynccontextmanager
     async def lifespan(app):
@@ -84,6 +95,15 @@ def create_app(db_path=None, tokens=None, employees_loader=None, *, activity_ena
         with store.connection() as db:
             db.execute("SELECT COUNT(*) FROM customers").fetchone()
         return {"status": "ok", "app": "helio-crm"}
+
+    @app.patch('/principals/{principal_id}/access', tags=['Administration'])
+    def change_access(principal_id: str, body: AccessChange, credentials: Credentials):
+        return store.change_access(token(credentials),principal_id,body.expected_version,
+                                   **body.model_dump(exclude={'expected_version'},exclude_unset=True))
+
+    @app.post('/identity-projection', tags=['Security context'])
+    def publish_identity(body: IdentityProjection, credentials: Credentials):
+        return store.publish_identity(token(credentials),body.model_dump())
 
     @app.get("/customers", tags=["Customers"])
     def customers(credentials: Credentials):

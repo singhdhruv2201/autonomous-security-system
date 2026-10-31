@@ -4,12 +4,13 @@ import hashlib
 import json
 import sqlite3
 import uuid
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .credentials import validate_credentials
-from . import activity
+from . import activity, policies, access
 
 
 class CRMError(Exception):
@@ -20,6 +21,11 @@ class CRMError(Exception):
 
 
 SAFE_DETAILS = {
+    "Sensitive content blocked",
+    "Access temporarily throttled",
+    "Request budget exceeded", "Record budget exceeded", "Bulk response blocked", "Policy state unavailable",
+    "Principal disabled", "Credential revoked or expired", "Principal not found", "Access state changed", "Invalid access transition", "Revoked credentials cannot be restored",
+    "Identity context unavailable", "Inactive owner or employee", "Invalid identity projection", "Identity projection is stale or replayed",
     "Missing or invalid bearer token", "Administrator credential required",
     "No active grant permits this operation", "Customer not found", "Grant not found",
     "Only notes and subscription_status can be updated", "Notes must be text of at most 500 characters",
@@ -33,11 +39,13 @@ def token_hash(token):
 
 
 class CRMStore:
-    def __init__(self, path: Path, *, activity_enabled=False, activity_limit=10000):
+    def __init__(self, path: Path, *, activity_enabled=False, activity_limit=10000, policy_config=None, clock=time.time):
         if type(activity_enabled) is not bool:
             raise ValueError("activity_enabled must be a boolean")
         if type(activity_limit) is not int or not 1 <= activity_limit <= 1000000:
             raise ValueError("activity_limit must be an integer between 1 and 1000000")
+        self.policy_config = policy_config or policies.PolicyConfig()
+        self.clock = clock
         self.path = path
         self.activity_enabled = activity_enabled
         self.activity_limit = activity_limit
@@ -65,7 +73,7 @@ class CRMStore:
         validate_credentials(tokens)
         principals = {"admin": "service:crm-admin", "maya": "employee:emp-maya-chen",
                       "agent": "agent:sales-research", "observer": "service:security-observer",
-                      "recovery": "service:activity-reader"}
+                      "recovery": "service:activity-reader", "publisher": "service:identity-publisher"}
         if self.is_initialized():
             with self.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -75,7 +83,7 @@ class CRMStore:
                 existing = {r["principal_id"]: r["token_hash"] for r in db.execute("SELECT * FROM credentials")}
                 expected = {principals[k]: token_hash(v) for k, v in tokens.items()}
                 if any(expected.get(k) != v for k, v in existing.items()) or any(
-                    k not in existing for k in expected if k not in {"service:security-observer", "service:activity-reader"}
+                    k not in existing for k in expected if k not in {"service:security-observer", "service:activity-reader", "service:identity-publisher"}
                 ):
                     raise ValueError("Configured credentials do not match stored credentials; restore the original .env")
                 if version == "1":
@@ -92,6 +100,9 @@ class CRMStore:
                 if version != '4':
                     activity.migrate_outbox(db)
                     db.execute("UPDATE metadata SET value='4' WHERE key='schema_version'")
+                policies.initialize(db)
+                if "publisher" in tokens and "service:identity-publisher" not in existing:
+                    self._add_publisher(db, tokens["publisher"])
             return
         ids = {e["id"] for e in employees}
         if "emp-maya-chen" not in ids:
@@ -134,7 +145,7 @@ class CRMStore:
             db.execute("INSERT INTO principals VALUES ('agent:sales-research', 'Sales Research Agent', 'agent', 'emp-maya-chen', 'user')")
             db.execute("INSERT INTO principals VALUES ('service:crm-admin', 'CRM Administration', 'service', 'emp-casey-wong', 'admin')")
             db.executemany("INSERT INTO credentials VALUES (?, ?)",
-                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key not in {"observer", "recovery"}])
+                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key not in {"observer", "recovery", "publisher"}])
             db.executemany("INSERT INTO grants (id,principal_id,scopes,status,version) VALUES (?, ?, ?, 'active', 1)", [
                 ("grant-sales-agent", "agent:sales-research", json.dumps(["customers:read"])),
                 ("grant-maya", "employee:emp-maya-chen", json.dumps(["customers:read", "customers:write"])),
@@ -158,19 +169,28 @@ class CRMStore:
             activity.initialize(db)
             activity.migrate_outbox(db)
             db.execute("INSERT INTO metadata VALUES ('schema_version', '4')")
+            policies.initialize(db)
+            if "publisher" in tokens:
+                self._add_publisher(db, tokens["publisher"])
+
+    @staticmethod
+    def _add_publisher(db, token):
+        db.execute("INSERT INTO principals VALUES ('service:identity-publisher','Identity Publisher','service','emp-casey-wong','user')")
+        db.execute("INSERT INTO credentials VALUES (?,'service:identity-publisher')", (token_hash(token),))
+        db.execute("INSERT INTO grants (id,principal_id,scopes,status,version,resource_id) VALUES ('grant-identity-publisher','service:identity-publisher',?,'active',1,'crm-identity')", (json.dumps(['identity:publish']),))
 
     @staticmethod
     def _add_recovery_reader(db, token):
         db.execute("INSERT INTO principals VALUES ('service:activity-reader', 'Activity Reader', 'service', 'emp-casey-wong', 'user')")
         db.execute("INSERT INTO credentials VALUES (?, 'service:activity-reader')", (token_hash(token),))
-        db.execute("INSERT INTO grants VALUES ('grant-activity-reader', 'service:activity-reader', ?, 'active', 1, 'crm-activity')",
+        db.execute("INSERT INTO grants (id,principal_id,scopes,status,version,resource_id) VALUES ('grant-activity-reader', 'service:activity-reader', ?, 'active', 1, 'crm-activity')",
                    (json.dumps(['events:read']),))
 
     @staticmethod
     def _add_observer(db, token):
         db.execute("INSERT INTO principals VALUES ('service:security-observer', 'Security Observer', 'service', 'emp-casey-wong', 'user')")
         db.execute("INSERT INTO credentials VALUES (?, 'service:security-observer')", (token_hash(token),))
-        db.execute("""INSERT INTO grants VALUES ('grant-security-observer', 'service:security-observer',
+        db.execute("""INSERT INTO grants (id,principal_id,scopes,status,version,resource_id) VALUES ('grant-security-observer', 'service:security-observer',
                    ?, 'active', 1, 'crm-metadata')""",
                    (json.dumps(["accounts:read", "grants:read", "inventory:read"]),))
 
@@ -189,30 +209,82 @@ class CRMStore:
 
     def _perform(self, token, action, resource, operation, *, admin=False, metadata=False, grant_resource=None):
         error, result, actor = None, None, None
+        decisions = []
+        budget_attempt, prepared_count, record_ids = False, 0, []
+        canonical_resource = activity.RESOURCES[action]
         with self._operation_connection() as db:
+            policy_now = self.clock()
             # Serialize authorization with mutations: revocation takes effect before
             # the next operation's permission check, with no check/use race.
             principal = db.execute("""SELECT p.* FROM credentials c JOIN principals p
                 ON c.principal_id=p.id WHERE c.token_hash=?""", (token_hash(token or ""),)).fetchone()
+            actor = principal['id'] if principal else None
+            previous_clock = db.execute("SELECT value FROM metadata WHERE key='access_clock'").fetchone()
+            access_now = max(policy_now,float(previous_clock[0]) if previous_clock else policy_now)
+            if principal is not None:
+                db.execute("INSERT OR REPLACE INTO metadata VALUES ('access_clock',?)",(str(access_now),))
+            failure_key = 'failure:' + (principal['id'] if principal else token_hash(token or ''))
             before = activity.record_snapshot(db, action, resource)
             db.execute("SAVEPOINT crm_operation")
             try:
+                if self.policy_config.failure_mode != 'off':
+                    check = policies.failure_check(db,failure_key,self.policy_config,policy_now)
+                    if check:
+                        decisions.append(check)
+                        self._require(check)
                 if principal is None:
                     raise CRMError(401, "Missing or invalid bearer token")
                 actor = principal["id"]
+                access_state = access.state(db, actor)
+                if access_state['principal_status'] == 'disabled':
+                    decisions.append(policies.decision('credential_lifecycle','deny','principal_disabled'))
+                    raise CRMError(403,'Principal disabled')
+                if access_state['credential_status'] == 'revoked' or (access_state['expires_at'] is not None and access_now >= access_state['expires_at']):
+                    decisions.append(policies.decision('credential_lifecycle','deny','credential_invalid'))
+                    raise CRMError(401,'Credential revoked or expired')
                 if admin:
                     if principal["role"] != "admin":
                         raise CRMError(403, "Administrator credential required")
                 elif not (metadata and principal["role"] == "admin"):
                     scopes = {scope for row in db.execute(
-                        "SELECT scopes FROM grants WHERE principal_id=? AND status='active' AND (? IS NULL OR resource_id=?)",
-                        (actor, grant_resource, grant_resource)
+                        "SELECT scopes FROM grants WHERE principal_id=? AND status='active' AND resource_id=? AND app_id='helio-crm'",
+                        (actor, canonical_resource)
                     ) for scope in json.loads(row["scopes"])}
                     if action not in scopes:
                         raise CRMError(403, "No active grant permits this operation")
+                decisions.append(policies.decision('resource_permissions', 'allow', 'authorized'))
+                if canonical_resource == 'customer-database':
+                    check = policies.owner_check(db, principal, self.policy_config, access_now)
+                    if check:
+                        decisions.append(check)
+                        if check['mode'] == 'enforce' and check['result'] in {'deny','unknown'}:
+                            raise CRMError(503 if check['result']=='unknown' else 403,
+                                           'Identity context unavailable' if check['result']=='unknown' else 'Inactive owner or employee')
+                if action == 'customers:read' and self.policy_config.volume_mode != 'off':
+                    budget_attempt = True
+                    check = policies.budget_check(db,actor,None,self.policy_config,policy_now)
+                    if check['result'] != 'allow':
+                        decisions.append(check)
+                        self._require(check)
                 result = operation(db)
+                if action == 'customers:read':
+                    rows = result if isinstance(result,list) else [result]
+                    prepared_count = len(rows)
+                    record_ids = [r['id'] for r in rows[:50]]
+                if canonical_resource == 'customer-database' and self.policy_config.content_mode != 'off':
+                    checks = policies.content_checks(result,self.policy_config,'pre_commit' if action=='customers:write' else 'pre_release')
+                    decisions.extend(checks)
+                    for check in checks: self._require(check)
+                if budget_attempt:
+                    prepared_count = len(result) if isinstance(result,list) else 1
+                    check = policies.budget_check(db,actor,prepared_count,self.policy_config,policy_now)
+                    decisions.append(check)
+                    self._require(check)
             except CRMError as caught:
                 db.execute("ROLLBACK TO crm_operation")
+                result = None
+                if caught.status_code in (401,403) and not decisions:
+                    decisions.append(policies.decision('resource_permissions', 'deny', 'authentication_failed' if caught.status_code == 401 else 'access_denied'))
                 error = CRMError(caught.status_code, caught.detail if caught.detail in SAFE_DETAILS else "Operation failed")
             except sqlite3.Error:
                 raise  # Storage failure rolls back the entire operation and audit.
@@ -221,11 +293,19 @@ class CRMStore:
                 error = CRMError(500, "Operation failed")
             db.execute("RELEASE crm_operation")
             status = error.status_code if error else 200
-            outcome = "allowed" if not error else ("denied" if status in (401, 403) else "failed")
-            occurred_at, request_id = datetime.now(timezone.utc).isoformat(), str(uuid.uuid4())
+            outcome = "allowed" if not error else ("denied" if status in (401, 403, 429) else "failed")
+            occurred_at, request_id = datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(), str(uuid.uuid4())
             from .lifecycle import context
             if context.get() is not None:
                 request_id = context.get()['request_id']
+            if self.policy_config.failure_mode != 'off':
+                failed = error is not None and error.detail in {'Missing or invalid bearer token','No active grant permits this operation','Administrator credential required','Credential revoked or expired'}
+                authenticated = any(d['rule']=='resource_permissions' and d['result']=='allow' for d in decisions)
+                check = policies.record_failure(db,failure_key,request_id,failed,authenticated,self.policy_config,policy_now)
+                if check: decisions.append(check)
+            if budget_attempt:
+                policies.record_budget(db,request_id,actor,prepared_count,error is None,self.policy_config,policy_now)
+            policies.persist(db, decisions, request_id, actor, canonical_resource, datetime.fromisoformat(occurred_at).timestamp())
             # Unknown path identifiers may themselves contain secrets or log injection.
             safe_resource = before["id"] if before else action.split(":", 1)[0]
             db.execute("""INSERT INTO audit (occurred_at, request_id, actor_id, action,
@@ -236,11 +316,33 @@ class CRMStore:
                 activity.append(db, request_id=request_id, occurred_at=occurred_at,
                                 principal=principal, action=action, resource=resource,
                                 status=status, outcome=outcome, result=result, before=before,
-                                limit=self.activity_limit)
+                                limit=self.activity_limit, decisions=decisions, prepared_count=prepared_count, record_ids=record_ids)
         # Raise only after committing the denial record.
         if error:
             raise error
         return result
+
+    @staticmethod
+    def _require(check):
+        if check['mode'] != 'enforce' or check['result'] not in {'deny','unknown'}:
+            return
+        if check['result'] == 'unknown':
+            raise CRMError(503,'Policy state unavailable')
+        if check['rule'] == 'sensitive_content':
+            raise CRMError(403,'Sensitive content blocked')
+        status, detail = {'access_cooldown':(429,'Access temporarily throttled'),
+                          'request_budget':(429,'Request budget exceeded'),
+                          'record_budget':(429,'Record budget exceeded'),
+                          'bulk_result':(403,'Bulk response blocked')}.get(check['reason'],(403,'Operation failed'))
+        raise CRMError(status,detail)
+
+    def change_access(self, token, principal_id, expected_version, **changes):
+        return self._perform(token,'access:change',principal_id,
+                             lambda db: access.change(db,principal_id,expected_version,self.clock(),**changes),admin=True)
+
+    def publish_identity(self, token, payload):
+        from .identity import publish
+        return self._perform(token,'identity:publish','crm-identity',lambda db: publish(db,payload,self.clock()))
 
     def activity_feed(self, token, *, status_only=False, after=0, through=None, source_instance_id=None, limit=100):
         def read(db):
@@ -304,7 +406,7 @@ class CRMStore:
 
     @staticmethod
     def _grants(db):
-        return [{**dict(r), "scopes": json.loads(r["scopes"]), "app_id": "helio-crm"} for r in db.execute("""
+        return [{**dict(r), "scopes": json.loads(r["scopes"])} for r in db.execute("""
             SELECT g.*, p.owner_employee_id FROM grants g JOIN principals p
             ON g.principal_id=p.id ORDER BY g.id""")]
 
@@ -324,9 +426,17 @@ class CRMStore:
             return next(g for g in self._grants(db) if g["id"] == grant_id)
         return self._perform(token, "grants:revoke", grant_id, revoke, admin=True)
 
+    @staticmethod
+    def _accounts(db):
+        return [dict(row) for row in db.execute("""SELECT p.*,
+            coalesce(a.principal_status,'active') AS principal_status,
+            coalesce(a.credential_status,'active') AS credential_status,
+            a.expires_at AS credential_expires_at,coalesce(a.version,1) AS access_version
+            FROM principals p LEFT JOIN access_state a ON a.principal_id=p.id ORDER BY p.id""")]
+
     def list_accounts(self, token):
         return self._perform(token, "accounts:read", "accounts",
-                             lambda db: [dict(r) for r in db.execute("SELECT * FROM principals ORDER BY id")], metadata=True)
+                             self._accounts, metadata=True)
 
     def inventory(self, token):
         def snapshot(db):
@@ -335,10 +445,13 @@ class CRMStore:
                 {"id": "crm-metadata", "name": "CRM access metadata", "classification": "internal"}]
             if db.execute("SELECT 1 FROM principals WHERE id='service:activity-reader'").fetchone():
                 resources.append({"id":"crm-activity", "name":"CRM security activity", "classification":"internal"})
+            if db.execute("SELECT 1 FROM principals WHERE id='service:identity-publisher'").fetchone():
+                resources.append({"id":"crm-identity", "name":"Directory projection", "classification":"internal"})
             return {"schema_version": 1, "company_id": "helio", "complete": True,
+                    "policy_configuration": self.policy_config.view(),
                     "app": {"id": "helio-crm", "name": "Helio CRM", "owner_employee_id": "emp-casey-wong"},
                     "resources": resources,
-                    "accounts": [dict(r) for r in db.execute("SELECT * FROM principals ORDER BY id")],
+                    "accounts": self._accounts(db),
                     "grants": self._grants(db)}
         return self._perform(token, "inventory:read", "inventory", snapshot, metadata=True)
 

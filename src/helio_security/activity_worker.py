@@ -104,7 +104,7 @@ class ActivityWorker:
                 expected = after
                 validated = []
                 for raw in page['items']:
-                    event = EVENT.validate_python(raw).model_dump()
+                    event = EVENT.validate_python(raw).model_dump(exclude_unset=True)
                     expected += 1
                     if any(event[k] != head[k] for k in ('company_id','source','source_instance_id')) or event['sequence'] != expected or expected>through:
                         raise RecoveryError('history_gap')

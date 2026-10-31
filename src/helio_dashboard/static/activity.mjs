@@ -47,7 +47,7 @@ function requestRow(item) {
     </summary><div class="activity-evidence"><p>Request <code>${h(item.request_id)}</code> · Source <code>${h(item.source_instance_id)}</code></p>
     <ol>${stages.map(stage => `<li><strong>${h(stage.event_type)}</strong><span>Sequence ${count(stage.sequence)} · ${h(date(stage.occurred_at))}</span>
     <dl>${['status_code','outcome','result_record_count','serialized_bytes','emitted_bytes','duration_ms','completion','scan_status','release_decision'].filter(key => stage[key] != null).map(key =>
-      `<div><dt>${h(key.replaceAll('_',' '))}</dt><dd>${h(stage[key])}</dd></div>`).join('')}</dl></li>`).join('')}</ol>
+      `<div><dt>${h(key.replaceAll('_',' '))}</dt><dd>${h(stage[key])}</dd></div>`).join('')}</dl>${(stage.policy_decisions ?? []).map(d => `<p><strong>${h(d.rule)}</strong> · ${h(d.mode)} · ${h(d.result)} · ${h(d.reason)}</p>`).join('')}</li>`).join('')}</ol>
     <p>Missing stages remain unknown. A completed send does not prove the caller consumed the response. An allowed operation is not a security verdict.</p></div></details>`;
 }
 
@@ -60,7 +60,7 @@ export function renderActivity(page, health, {error=false,loading=false,filter='
     ${health?.source_resets ? '<p class="activity-warning">A source reset was detected. Earlier coverage remains separate and needs review.</p>' : ''}
     ${health?.recovery_error ? `<p class="activity-warning">Recovery: ${h(health.recovery_error.replaceAll('_',' '))}. Coverage cannot be confirmed.</p>` : ''}
     ${(health?.sources ?? []).map(sourceCard).join('') || `<p>${health?.enabled === false ? 'Enable the activity pipeline to collect CRM requests.' : 'Awaiting a verified CRM source check.'}</p>`}
-    <p class="activity-source-note">Receipt and processing are separate checkpoints. Secret scanners and activity policies are not enabled.</p></section>
+    <p class="activity-source-note">Receipt and processing are separate checkpoints. Expand a request for its policy decisions and scan results. Current policy modes are shown in Policies.</p></section>
     <section class="activity-list"><div class="activity-list-heading"><h2>Requests <span class="count">${count(page?.total)}</span></h2>
     <form id="activity-filter-form"><label>Outcome <select id="activity-outcome" name="outcome">${[['','All outcomes'],['allowed','Allowed'],['denied','Denied'],['failed','Failed']].map(([value,label]) => `<option value="${value}" ${value===filter ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <label>Actor ID <input id="activity-actor" name="actor" maxlength="200" value="${h(actor)}" placeholder="All actors"></label><button class="button" type="submit">Apply</button></form></div>
