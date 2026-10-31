@@ -1,12 +1,13 @@
-# Phases 5–6 implementation status (uncommitted work)
+# Phases 5–6 implementation and acceptance status
 
-Snapshot of the uncommitted working tree on top of `f966fdd` ("Add CRM request
-capture and durable signed webhook delivery"), written 2026-10-30 after the Codex
-session implementing it stopped mid-verification. The operator guide for the feature
-itself is [activity-processing.md](activity-processing.md); this file records what
-was built, what was verified, and what is still open.
+Updated 2026-10-31. The original phase-5/6 implementation is already committed in
+`22cc128` on top of `f966fdd`; the earlier handoff described the tree before that
+commit. The local Docker environment is now upgraded and verified. This closeout
+adds a reproducible latency benchmark, fixes per-event sender throttling and stale
+dashboard wording, and records the tested load boundary. See the operator guide
+[activity-processing.md](activity-processing.md) for commands and measured results.
 
-## What is being implemented
+## Implemented scope
 
 From the [implementation phases](implementation-phases.md):
 
@@ -113,45 +114,58 @@ complete coverage.
 | `tests/test_activity_api.py` | Read auth, bounded filters, security API proxy company check, dashboard filter forwarding |
 | `tests/test_activity_end_to_end.py` | A live CRM call and a denial reach the dashboard API without a manual sync, and recovery after an Awasi outage |
 | `tests/test_activity_graph.py` (Neo4j) | The recovery grant is observed on its own `crm-activity` resource and creates no false findings |
+| `tests/test_activity_benchmark.py` | Percentiles, complete evidence, missing/duplicate/invalid samples, bounded load, CLI outcomes and real HTTP/SQLite receipt probes |
+| `tests/frontend/dashboard-activity.test.mjs` | Overview links to activity without claiming request capture is unimplemented |
 | `tests/frontend/activity*.test.mjs` | Coverage state is never falsely complete, four stages appear as one row, escaping, outage display, pagination, and refresh preserving UI state |
 
-## Verification status (re-run 2026-10-30)
+## Verification status (2026-10-31)
 
 | Gate | Result |
 | --- | --- |
-| `.venv/bin/python -m pytest -q` | 403 passed, 17 skipped (all skips are Neo4j-only tests) |
-| `make test-integration` (real Neo4j) | **420 passed**. This includes `test_activity_graph.py`, the check Codex was running when it stopped, so the graph fix for the recovery grant's resource holds. |
-| `make test-ui` | 14/14 passed |
-| `docker compose --profile activity config --quiet` | **Fails**: `CRM_RECOVERY_TOKEN` is missing from the local `.env` (see below) |
+| `.venv/bin/python -m pytest -q` | 423 passed, 17 skipped (Neo4j-only tests) |
+| `make test-integration` | 440 passed, including real Neo4j, SQLite and HTTP |
+| `make test-ui` | 15 passed |
+| `docker compose --profile activity config --quiet` | Passed; recovery token and all activity flags configured |
+| Live Docker/browser smoke | Allowed request and denial recovered as two rows / eight unique events after an ingest outage; filters, expanded evidence and older pages worked |
+| Declared 20-request burst, concurrency 4 | Receipt p95 631.37 ms; durable acknowledgement p95 637.82 ms: target met |
+| Larger 100-request burst, concurrency 4 | Receipt p95 1,896.54 ms; durable acknowledgement p95 3,090.10 ms: conservative bound missed |
 
-Codex also reported a browser smoke run on isolated state: 12 CRM calls (9 allowed,
-3 denied) showed as 12 rows with 4 stages each, and the denial filter worked. It
-also measured about 930 ms p95 for source-to-receipt latency locally. Neither result
-was re-run here, and neither is recorded in the repo.
+The Starlette/httpx deprecation warning remains unrelated to this feature. Latency
+results are real Docker measurements, not assertions inferred from unit-test timing.
+The benchmark returns failure for missed targets and invalid/incomplete samples.
 
-## What is yet to be done
+## Closeout checklist
 
-1. **Upgrade the local environment.** The local `.env` has no `CRM_RECOVERY_TOKEN`,
-   so the updated Compose file won't render. The running containers are still on the
-   phase-4 build, and no `awasi-ingest` container is running. Back up the CRM and
-   inbox volumes, run `make setup`, then bring the stack up with the activity profile
-   as described in [activity-processing.md](activity-processing.md). After that,
-   confirm that the Activity tab populates against the real deployment and not only
-   the isolated smoke state.
-2. **Record the latency measurement.** Phase 6 requires a declared measurement of
-   source-to-receipt latency (hardware, payload, concurrency, sample size), checked
-   against the p95 ≤ 2 s target. The ~930 ms p95 exists only in the Codex chat. No
-   benchmark script or doc entry was committed, and `activity-delivery.md` still says
-   "Delivery receipt latency qualification remains part of phase 6." Rerun it and add
-   the method and result to the Acceptance evidence section of
-   `activity-processing.md`.
-3. **Repeat the browser smoke on the upgraded stack.** Check one allowed request, one
-   denial, and an outage followed by recovery, as listed in the phase-6 gate.
-4. **Final review and commit.** The Codex session ended before its closing review and
-   summary. Review the diff, then commit phases 5 and 6, ideally as two commits that
-   match their acceptance boundaries.
+1. **Environment upgraded.** `make setup` preserved credentials and added the missing
+   recovery token. Capture, signed delivery, processing and the Activity proxy are
+   enabled in ignored local configuration. All six services are healthy. Consistent
+   CRM/inbox backups passed SQLite integrity checks before rebuilding this closeout;
+   retained data, grants, source identity and Neo4j state were preserved.
+2. **Latency measurement implemented and recorded.** `make benchmark-activity` runs
+   bounded concurrent CRM reads and measures all source events against persisted
+   inbox receipts and durable webhook acknowledgements. JSON reports contain the
+   load, hardware/runtime, image identity, payload size, percentile method and result.
+   The baseline missed the target because the sender paused after every event. A
+   failing regression test reproduced this; the sender now drains due events before
+   waiting. The exact before/after and larger-burst limitation are recorded in the
+   [Acceptance evidence](activity-processing.md#acceptance-evidence).
+3. **Browser smoke repeated on the deployment.** The dashboard showed unavailable
+   activity with unknown coverage during the ingestion outage. CRM continued serving
+   an allowed call and a denial; after restart the dashboard recovered both exactly
+   once with four stages each. Denial filtering, expandable evidence, 25-to-50-row
+   pagination and the overview's new Activity link were verified.
+4. **Final review completed.** Recovery/authentication, durable checkpoints,
+   deduplication, honest health states and sender retry/lease behavior were reviewed
+   against the phase gates. Focused failing tests preceded behavioral changes; unit,
+   integration, frontend and configuration checks passed. The already committed
+   phase-5/6 implementation is retained; follow-up commits contain the closeout code,
+   regression tests and current acceptance evidence rather than rewriting history.
 
-### Known limitations to keep in mind (not blockers for phases 5–6)
+No phase-7 policy registry, AI investigation, scanners, remediation or retention
+features were added. The 100-request burst is **not** qualified for the conservative
+two-second bound; the passing measurement applies only to the declared smaller load.
+
+## Retained limitations and later work
 
 - `process_one` processes the inbox strictly in order. If a stored receipt ever fails
   re-validation, it will be retried forever and block every receipt behind it.

@@ -171,11 +171,82 @@ test verifies the new reader grant/resource without breaking snapshot observatio
 Frontend tests cover escaping, honest coverage state, request grouping and preserving
 activity UI state during background graph refreshes.
 
-The browser smoke used temporary isolated CRM/inbox/platform state. Twelve actual
-HTTP calls (nine allowed and three denied) appeared as twelve rows with four stages
-each, with working denial filtering and expandable evidence. Existing demo databases
-and graph state were not reset.
+The 2026-10-31 Docker acceptance run used the retained local Compose volumes, after
+consistent SQLite backups of CRM and inbox. All six services were healthy. An allowed
+CRM read and a 401 denial made while `awasi-ingest` was stopped retained eight source
+events. The browser displayed **Activity unavailable / Coverage unknown** during the
+outage. After restart, both requests appeared exactly once with four stages each;
+receipt and processing cursors caught up with no gaps. Denial filtering, expanding
+evidence, pagination and the overview's **View activity** navigation were checked in
+the browser. No credentials, grants, customer records or source identities were reset.
 
 Run the gates with `.venv/bin/python -m pytest -q`, `make test-integration`,
 `make test-ui`, and `docker compose --profile activity config --quiet` after setup.
 The existing Starlette/httpx deprecation warning is unrelated to these phases.
+
+### Reproducible receipt latency qualification
+
+Build the current code into the running CRM and receiver before measuring. The
+benchmark generates authorized reads of the six synthetic customers and reads only
+timing/identity metadata through read-only SQLite probes inside the containers.
+It does not export customer bodies or credentials, change grants, prune history,
+or stop services. Keep other CRM traffic idle for a run: extra events, a source
+reset, missing/duplicate stages, missing acknowledgements, exhausted capacity or
+invalid clocks invalidate the sample instead of silently shrinking it.
+
+```sh
+docker compose up --build -d --wait
+make benchmark-activity BENCHMARK_ARGS='--samples 20 --warmup 5 --concurrency 4 --output work/activity-latency-20.json'
+# Larger burst; this missed the conservative target on the measured machine:
+make benchmark-activity BENCHMARK_ARGS='--samples 100 --warmup 10 --concurrency 4 --output work/activity-latency-100.json'
+```
+
+There is no pacing between requests: each of four client threads starts its next
+read when the previous HTTP response returns. Warmup events are fully delivered
+before the measured burst. Each request returns six customers / 959 JSON bytes
+and produces four separate security events, 434–672 bytes each in these runs.
+The report uses nearest-rank p95 over **all** measured events, excluding warmup.
+It saves hardware/runtime versions, container image identities, Git state, load,
+payload sizes and min/median/p95/max timings as JSON. Defaults are 100 requests,
+10 warmups and concurrency four; bounds are enforced before issuing traffic.
+
+Two timings are deliberately separate:
+
+- **First receipt:** source `occurred_at` to the inbox's persisted `received_at`.
+  Push and recovery share the first receipt. This timestamp is sampled before the
+  admission transaction commits, so it alone is not an exact durable-commit timer.
+- **Durable acknowledgement bound:** source `occurred_at` to CRM's recorded
+  successful webhook HTTP 200/202 acknowledgement, which follows the receiver
+  commit. This is a conservative upper bound; recovery can have stored the event
+  earlier. The tool declares `target_met` only when both p95 values are ≤ 2 seconds.
+
+The CLI returns 0 for a qualified run, 1 for a complete measurement that misses
+the target, and 2 for an incomplete/invalid measurement. `make` may translate a
+recipe failure to exit 2. It never equates a fast CRM response with delivered
+evidence. This measures receipt, not normalization, UI refresh, policy or remediation.
+
+Measured 2026-10-31 on Apple M4 Pro / 48 GiB RAM, macOS 26.6.2 arm64,
+Docker Engine 29.6.1 with a 14-vCPU / 15.6-GiB Linux VM, container Python 3.11.18,
+real HTTP and persisted SQLite volumes. Capture, signed push and five-second
+recovery polling were enabled. This was a shared development machine, not an
+isolated production capacity test. Both source and receipt clocks ran in that VM.
+
+| Sender | Measured requests / events | Warmups | Concurrency | Receipt median / p95 | Acknowledgement median / p95 | Conservative target |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| Original, pauses after every event | 20 / 80 | 5 | 4 | 3,805.94 / 3,813.07 ms | 10,361.51 / 19,426.04 ms | Missed |
+| Drains ready events | 20 / 80 | 5 | 4 | 415.61 / 631.37 ms | 417.77 / 637.82 ms | Met |
+| Drains ready events, larger burst | 100 / 400 | 10 | 4 | 1,761.34 / 1,896.54 ms | 2,465.57 / 3,090.10 ms | **Missed** |
+
+The original worker slept 250 ms after every event, limiting ready-queue drainage
+to roughly four events per second before network/storage costs. It now drains due
+events continuously and waits 250 ms only when idle or after a storage exception;
+retry schedules, bounded attempts, leases and shutdown checks remain enforced.
+Regression tests cover idle/error backoff and complete concurrent HTTP lifecycles.
+
+The two-second bound is qualified for the declared **20-request burst only**.
+The larger burst's first-receipt p95 was below two seconds, but its durable
+acknowledgement bound missed, so that load is not qualified. This records the
+phase-6 acceptance boundary; it does not establish sustained throughput or a
+production SLO. The 10,000-event cap and absent retention still limit unattended use.
+Local raw reports and browser evidence are under ignored `work/phase56-20261031/`;
+the method and measured results above remain available in Git.

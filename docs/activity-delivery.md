@@ -5,9 +5,9 @@ processing and dashboard visibility; use the [current startup and recovery guide
 
 The CRM captures request, operation, prepared response and observed response
 completion. A background sender delivers security events to an independent Awasi
-inbox. Receipt means **durably stored, pending processing**. Event processing,
-gap recovery, activity dashboard views, new policies and remediation are later
-phases. The existing dashboard's snapshot-based findings are unchanged.
+inbox. Receipt means **durably stored, pending processing**. Phases 5–6 implement event
+processing, gap recovery and the Activity view; new policies and remediation remain
+later work. The existing snapshot-based findings continue independently.
 
 ## Enable the local environment
 
@@ -121,12 +121,14 @@ exponential backoff and jitter. `Retry-After` is honored up to a 300-second boun
 HTTP timeout is five seconds; five attempts are allowed. Other statuses (including
 redirects, auth failures, schema errors and conflicts) become `dead_letter` immediately.
 Exhausted retries retain their source event and outbox row for operator replay.
-The worker checks for work every 250 ms; this is not a latency/throughput guarantee.
+The worker drains due events continuously and polls every 250 ms when idle or
+after a storage exception. This is not a latency/throughput guarantee.
 
 Delivery attempts use a separate local `delivery_audit` (latest 1,000 entries) and
 never generate exported activity recursively. Queue state, attempts, next retry,
 last safe status and error code are in `activity_outbox`. Inspect these using a
-trusted local SQLite connection; activity and queue UI/API browsing are later work.
+trusted local SQLite connection, or use the current Activity health API and dashboard
+for sampled queue/capacity summaries.
 
 After fixing the destination/key/storage problem, a CRM administrator may POST
 `{}` to `/activity-deliveries/{event_sequence}/replay` using the existing CRM admin
@@ -157,8 +159,8 @@ Set `CRM_WEBHOOK_ENABLED=0` and recreate CRM to stop delivery while retaining
 capture. Set both flags to `0` to stop new capture as well. Existing events, inbox,
 queue, credentials and grants remain. Stop the receiver with
 `docker compose --profile activity stop awasi-ingest`. Do not use `down -v` as a
-recovery action: it deletes retained data. No gap repair, processing checkpoint or
-claim of complete coverage is supplied until phase 5.
+recovery action: it deletes retained data. The current phase-5 worker repairs gaps
+and tracks separate received/processed checkpoints; see the recovery guide.
 
 ## Verification
 
@@ -190,5 +192,6 @@ macOS 26.5.2, Python 3.11.6): 20 warmup calls followed by 200 sequential
 one, FastAPI TestClient, real temporary SQLite and sender disabled. Capture off
 measured 1.47 ms median / 2.16 ms p95; capture on measured 5.46 ms median /
 15.18 ms p95. This single local measurement isolates audit overhead; it is not
-a network, concurrent-load or production latency guarantee. Delivery receipt
-latency qualification remains part of phase 6.
+a network, concurrent-load or production latency guarantee. Current Docker receipt
+measurements, the sender drainage fix and the larger-burst limit are recorded in
+[phase-6 acceptance evidence](activity-processing.md#reproducible-receipt-latency-qualification).

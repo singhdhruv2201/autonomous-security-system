@@ -188,7 +188,9 @@ replay, credential rotation, and degraded monitoring behavior.
 verification, and one end-to-end CRM call that appears in Awasi without manual sync.
 Repeat with a denial and an Awasi outage/recovery. Confirm four lifecycle events do
 not display as four separate business requests. Verify source-to-receipt latency
-and identify any missed target explicitly.
+and identify any missed target explicitly. The 2026-10-31
+[acceptance evidence](activity-processing.md#acceptance-evidence) records a qualified
+20-request burst and the missed conservative bound at a 100-request burst.
 
 **First usable milestone:** CRM activity is reliably observable. This does not yet
 mean all policy checks or automatic remedies are enabled.

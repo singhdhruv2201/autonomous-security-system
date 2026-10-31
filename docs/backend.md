@@ -153,8 +153,9 @@ worker run reconciles any graph-only changes.
 The credentials represent local viewer/operator roles, not individual human
 identities. Production SSO, per-user audit identity, tenant provisioning,
 distributed workers, retention policies, and deployment hardening remain future
-work. The [local dashboard](dashboard.md) is implemented. Source activity ingestion, AI investigation, Slack approval,
-and verified remediation are separate upcoming milestones. The platform's CRM
+work. The [local dashboard](dashboard.md) and optional
+[activity ingestion and recovery](activity-processing.md) are implemented. AI
+investigation, Slack approval and verified remediation remain later milestones. The platform's CRM
 observer cannot execute remediation even if asked to do so.
 
 ## Verification
