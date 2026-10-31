@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .credentials import validate_credentials
+from . import activity
 
 
 class CRMError(Exception):
@@ -18,13 +19,28 @@ class CRMError(Exception):
         self.detail = detail
 
 
+SAFE_DETAILS = {
+    "Missing or invalid bearer token", "Administrator credential required",
+    "No active grant permits this operation", "Customer not found", "Grant not found",
+    "Only notes and subscription_status can be updated", "Notes must be text of at most 500 characters",
+    "Invalid subscription status", "Customer changed; fetch current version before editing",
+    "Grant changed; fetch current version before revocation", "Operation failed",
+}
+
+
 def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
 class CRMStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, activity_enabled=False, activity_limit=10000):
+        if type(activity_enabled) is not bool:
+            raise ValueError("activity_enabled must be a boolean")
+        if type(activity_limit) is not int or not 1 <= activity_limit <= 1000000:
+            raise ValueError("activity_limit must be an integer between 1 and 1000000")
         self.path = path
+        self.activity_enabled = activity_enabled
+        self.activity_limit = activity_limit
 
     @contextmanager
     def connection(self):
@@ -53,7 +69,7 @@ class CRMStore:
             with self.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
                 version = db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0]
-                if version not in {"1", "2"}:
+                if version not in {"1", "2", "3"}:
                     raise ValueError("Unsupported CRM schema version")
                 existing = {r["principal_id"]: r["token_hash"] for r in db.execute("SELECT * FROM credentials")}
                 expected = {principals[k]: token_hash(v) for k, v in tokens.items()}
@@ -66,6 +82,10 @@ class CRMStore:
                     db.execute("UPDATE metadata SET value='2' WHERE key='schema_version'")
                 if "observer" in tokens and "service:security-observer" not in existing:
                     self._add_observer(db, tokens["observer"])
+                if version != "3":
+                    activity.initialize(db)
+                    db.execute("UPDATE metadata SET value='3' WHERE key='schema_version'")
+                activity.validate_schema(db)
             return
         ids = {e["id"] for e in employees}
         if "emp-maya-chen" not in ids:
@@ -127,7 +147,8 @@ class CRMStore:
             ])
             if "observer" in tokens:
                 self._add_observer(db, tokens["observer"])
-            db.execute("INSERT INTO metadata VALUES ('schema_version', '2')")
+            activity.initialize(db)
+            db.execute("INSERT INTO metadata VALUES ('schema_version', '3')")
 
     @staticmethod
     def _add_observer(db, token):
@@ -137,14 +158,28 @@ class CRMStore:
                    ?, 'active', 1, 'crm-metadata')""",
                    (json.dumps(["accounts:read", "grants:read", "inventory:read"]),))
 
+    @contextmanager
+    def _operation_connection(self):
+        try:
+            with self.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                yield db
+        except activity.CapacityError:
+            raise CRMError(503, "CRM activity capacity reached") from None
+        except sqlite3.Error:
+            # Covers opening, writes and COMMIT. Never return success if evidence
+            # could not be committed, or expose database/trigger exception text.
+            raise CRMError(503, "CRM storage is temporarily unavailable") from None
+
     def _perform(self, token, action, resource, operation, *, admin=False, metadata=False):
         error, result, actor = None, None, None
-        with self.connection() as db:
+        with self._operation_connection() as db:
             # Serialize authorization with mutations: revocation takes effect before
             # the next operation's permission check, with no check/use race.
-            db.execute("BEGIN IMMEDIATE")
             principal = db.execute("""SELECT p.* FROM credentials c JOIN principals p
                 ON c.principal_id=p.id WHERE c.token_hash=?""", (token_hash(token or ""),)).fetchone()
+            before = activity.record_snapshot(db, action, resource)
+            db.execute("SAVEPOINT crm_operation")
             try:
                 if principal is None:
                     raise CRMError(401, "Missing or invalid bearer token")
@@ -160,13 +195,28 @@ class CRMStore:
                         raise CRMError(403, "No active grant permits this operation")
                 result = operation(db)
             except CRMError as caught:
-                error = caught
+                db.execute("ROLLBACK TO crm_operation")
+                error = CRMError(caught.status_code, caught.detail if caught.detail in SAFE_DETAILS else "Operation failed")
+            except sqlite3.Error:
+                raise  # Storage failure rolls back the entire operation and audit.
+            except Exception:
+                db.execute("ROLLBACK TO crm_operation")
+                error = CRMError(500, "Operation failed")
+            db.execute("RELEASE crm_operation")
             status = error.status_code if error else 200
             outcome = "allowed" if not error else ("denied" if status in (401, 403) else "failed")
+            occurred_at, request_id = datetime.now(timezone.utc).isoformat(), str(uuid.uuid4())
+            # Unknown path identifiers may themselves contain secrets or log injection.
+            safe_resource = before["id"] if before else action.split(":", 1)[0]
             db.execute("""INSERT INTO audit (occurred_at, request_id, actor_id, action,
                 resource, outcome, status_code, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (datetime.now(timezone.utc).isoformat(), str(uuid.uuid4()), actor, action,
-                 resource, outcome, status, error.detail if error else "Operation completed"))
+                (occurred_at, request_id, actor, action,
+                 safe_resource, outcome, status, error.detail if error else "Operation completed"))
+            if self.activity_enabled:
+                activity.append(db, request_id=request_id, occurred_at=occurred_at,
+                                principal=principal, action=action, resource=resource,
+                                status=status, outcome=outcome, result=result, before=before,
+                                limit=self.activity_limit)
         # Raise only after committing the denial record.
         if error:
             raise error

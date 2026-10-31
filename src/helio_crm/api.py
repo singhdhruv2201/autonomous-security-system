@@ -37,8 +37,14 @@ def load_directory():
         return json.load(response)
 
 
-def create_app(db_path=None, tokens=None, employees_loader=None):
-    store = CRMStore(db_path or Path(os.getenv("CRM_DB_PATH", "data/crm.sqlite3")))
+def create_app(db_path=None, tokens=None, employees_loader=None, *, activity_enabled=None):
+    if activity_enabled is None:
+        configured = os.getenv("CRM_ACTIVITY_ENABLED", "0")
+        if configured not in {"0", "1"}:
+            raise ValueError("CRM_ACTIVITY_ENABLED must be 0 or 1")
+        activity_enabled = configured == "1"
+    store = CRMStore(db_path or Path(os.getenv("CRM_DB_PATH", "data/crm.sqlite3")),
+                     activity_enabled=activity_enabled)
 
     @asynccontextmanager
     async def lifespan(app):

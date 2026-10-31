@@ -10,6 +10,9 @@ builds a Neo4j company graph, and persists security findings. Its authenticated
 API runs on port 8002 with a background observation worker. The Awasi dashboard
 on port 3000 shows company security, the graph, agents, apps, policies, and findings.
 AI investigation, Slack, and automated remediation remain later milestones.
+The CRM also has opt-in durable operation events and a pending outgoing queue
+(phases 0–1). Webhook delivery and HTTP response lifecycle capture are not enabled
+yet. See the [activity contract and coverage](docs/crm-activity-contract.md).
 See [dashboard guide](docs/dashboard.md), [security API and workflow](docs/backend.md) and [graph walkthrough](docs/graph.md).
 
 ## Start with Docker

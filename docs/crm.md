@@ -107,6 +107,60 @@ are recorded after collecting their result, so their own record appears on the
 next read. The audit table is a local append-only application convention, not
 tamper-proof storage.
 
+## Durable operation activity (phases 0–1)
+
+Schema v3 adds `activity_events`, `activity_outbox`, and `operational_events`.
+Existing v1/v2 databases migrate in one transaction while preserving customer
+records, credential hashes, revoked grants, and legacy audits. The source-instance
+UUID survives restart; incomplete/corrupt activity schemas fail startup. Older
+binaries do not support schema v3. Back up the database before deploying a new
+build; rollback requires a compatible build or restoring that backup, not resetting
+schema metadata by hand.
+
+Capture defaults off. To opt a controlled local Docker demo in after building:
+
+```sh
+CRM_ACTIVITY_ENABLED=1 docker compose up --build -d --no-deps crm
+```
+
+The Compose setting accepts only `0` or `1`. Local Uvicorn uses the same environment
+variable; tests/programmatic callers can explicitly set
+`CRMStore(path, activity_enabled=True)` or `create_app(..., activity_enabled=True)`.
+This setting affects future operations and does not replay old audit history.
+No deployment or capture setting is changed merely by editing the source.
+
+Each protected store operation emits metadata about its outcome. Customer operations,
+grant revocations, and denials/failures enter the security stream with a pending
+outbox entry; successful metadata/audit reads enter only the operational stream.
+Both streams correlate with legacy audit request IDs. Operation IDs are not yet
+correlated with the full HTTP lifecycle. See the exact
+[activity contract and coverage matrix](crm-activity-contract.md).
+
+Business changes, legacy audit, activity event and pending delivery commit together.
+Rejected partial writes roll back before the denial is recorded. An unusable
+audit/event/outbox store returns a generic 503 and prevents success/data release.
+Unexpected application errors produce a safe 500 and failure evidence when storage
+is still usable. Unknown requested IDs and exception text are sanitized; payloads
+never include customer bodies, notes, bearer tokens or token hashes.
+
+The controlled-demo limit is 10,000 retained events per stream. A full required
+stream returns 503 without committing new business changes. There is no sender,
+cleanup job or automatic pruning yet; leave capture off for unattended use. To stop
+capture, recreate CRM with `CRM_ACTIVITY_ENABLED=0`; existing events and pending
+deliveries remain. This does not change grants or disable the original audit log.
+The database is application-append-only, not tamper-proof.
+
+There are no new event-reader/webhook endpoints or response scanners in this phase.
+Framework-rejected requests, public routes, emitted bytes and response interruptions
+remain phase-2 work. Actual request/response evidence will distinguish completed
+database operations from successful transmission to a caller.
+
+Focused checks:
+
+```sh
+.venv/bin/python -m pytest -q tests/test_crm_activity.py tests/test_crm_activity_api.py tests/test_crm_activity_migrations.py
+```
+
 ## Repeat the scenario
 
 To restore employment status without changing CRM grants:

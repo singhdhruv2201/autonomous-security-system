@@ -21,6 +21,7 @@ services:
     command: ["uvicorn", "helio_crm.api:app", "--host", "0.0.0.0", "--port", "8001"]
     environment:
       CRM_DB_PATH: /data/crm.sqlite3
+      CRM_ACTIVITY_ENABLED: ${CRM_ACTIVITY_ENABLED:-0}
       HELIO_DIRECTORY_URL: http://simulator:8000
       CRM_ADMIN_TOKEN: ${CRM_ADMIN_TOKEN:?Run make setup first}
       CRM_MAYA_TOKEN: ${CRM_MAYA_TOKEN:?Run make setup first}
