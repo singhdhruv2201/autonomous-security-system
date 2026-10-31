@@ -37,6 +37,9 @@ export function securityState(state) {
     Object.keys(state.errors ?? {}).length ||
     !state.overview.coverage_complete ||
     !state?.policies?.items?.some((p) => p.enabled) ||
+    state?.policies?.items?.some((p) => p.coverage_status === 'unknown') ||
+    Object.entries(state?.overview?.policy_runtime ?? {}).some(([key, record]) =>
+      key !== 'configuration' && (record.value?.status !== 'ok' || Date.now()/1000 - record.updated_at > 120)) ||
     pending
   )
     return {
@@ -178,6 +181,16 @@ export function graphLayout(nodes) {
         return { ...n, x: lanes[kind] ?? 610, y };
       }),
   );
+}
+
+export function formatTimestamp(at) {
+  if (at == null || at === '') return 'Not observed';
+  const date = new Date(typeof at === 'number' ? at * 1000 : at);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      })
+    : 'Not observed';
 }
 
 export function findingsVerified(state) {

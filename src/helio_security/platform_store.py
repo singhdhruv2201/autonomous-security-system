@@ -4,10 +4,12 @@ import json
 import sqlite3
 import time
 import uuid
+from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
 
 from .rules import RULE_ID
+from .policies import policy
 
 
 class PlatformStore:
@@ -32,7 +34,7 @@ class PlatformStore:
             db.execute("BEGIN IMMEDIATE")
             db.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
             version = db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
-            if version and version[0] != "1":
+            if version and version[0] not in {"1", "2"}:
                 raise ValueError("Unsupported platform schema version")
             for statement in [
                 """CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, company_id TEXT NOT NULL,
@@ -56,7 +58,16 @@ class PlatformStore:
                 "CREATE INDEX IF NOT EXISTS finding_company ON findings(company_id, status)",
             ]:
                 db.execute(statement)
-            db.execute("INSERT OR IGNORE INTO metadata VALUES ('schema_version','1')")
+            db.execute("CREATE TABLE IF NOT EXISTS rule_evaluations (company_id TEXT NOT NULL, rule TEXT NOT NULL, observed_at REAL NOT NULL, PRIMARY KEY(company_id,rule))")
+            db.execute("INSERT OR IGNORE INTO rule_evaluations SELECT company_id,?,observed_at FROM evaluations", (RULE_ID,))
+            if next(r for r in db.execute('PRAGMA table_info(events)') if r['name']=='run_id')['notnull']:
+                db.execute("CREATE TABLE events_v2 (id INTEGER PRIMARY KEY AUTOINCREMENT,company_id TEXT NOT NULL,finding_id TEXT NOT NULL REFERENCES findings(id),type TEXT NOT NULL,occurred_at REAL NOT NULL,run_id TEXT REFERENCES runs(id),reason TEXT NOT NULL,evidence TEXT NOT NULL)")
+                db.execute('INSERT INTO events_v2 SELECT * FROM events')
+                db.execute('DROP TABLE events')
+                db.execute('ALTER TABLE events_v2 RENAME TO events')
+            db.execute('CREATE TABLE IF NOT EXISTS activity_import_state (company_id TEXT PRIMARY KEY,instance_id TEXT NOT NULL,cursor INTEGER NOT NULL,last_success REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS policy_runtime (company_id TEXT NOT NULL,name TEXT NOT NULL,value TEXT NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(company_id,name))')
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('schema_version','2')")
 
     @staticmethod
     def _run(row):
@@ -95,7 +106,7 @@ class PlatformStore:
             for run in runs:
                 db.execute("INSERT INTO audit(company_id,actor,action,run_id,occurred_at) VALUES (?,?,'sync_interrupted',?,?)",
                            (company, run["actor"], run["id"], now))
-                for previous in list(db.execute("SELECT * FROM findings WHERE company_id=?", (company,))):
+                for previous in list(db.execute("SELECT * FROM findings WHERE company_id=? AND rule=?", (company, RULE_ID))):
                     self._unverify(db, company, previous, run["id"], now, "observation_interrupted")
             db.execute("UPDATE runs SET status='interrupted',finished_at=?,error='process_restarted' WHERE company_id=? AND status='running'",
                        (now, company))
@@ -107,15 +118,17 @@ class PlatformStore:
                    (company, finding_id, event, now, run_id, reason, evidence))
 
     def _reconcile(self, db, company, run_id, evaluation, now):
-        old = db.execute("SELECT observed_at FROM evaluations WHERE company_id=?", (company,)).fetchone()
+        rule = evaluation.get("rule", RULE_ID)
+        definition = policy(rule)
+        old = db.execute("SELECT observed_at FROM rule_evaluations WHERE company_id=? AND rule=?", (company, rule)).fetchone()
         if old and evaluation["observed_at"] <= old[0]:
             return
-        db.execute("INSERT INTO evaluations VALUES (?,?) ON CONFLICT(company_id) DO UPDATE SET observed_at=excluded.observed_at",
-                   (company, evaluation["observed_at"]))
-        existing = {r["id"]: dict(r) for r in db.execute("SELECT * FROM findings WHERE company_id=?", (company,))}
+        db.execute("INSERT INTO rule_evaluations VALUES (?,?,?) ON CONFLICT(company_id,rule) DO UPDATE SET observed_at=excluded.observed_at",
+                   (company, rule, evaluation["observed_at"]))
+        existing = {r["id"]: dict(r) for r in db.execute("SELECT * FROM findings WHERE company_id=? AND rule=?", (company, rule))}
         seen = set()
         for candidate in evaluation["candidates"]:
-            identity = json.dumps([company, RULE_ID, *candidate["identity"]])
+            identity = json.dumps([company, rule, *candidate["identity"]])
             finding_id = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
             seen.add(finding_id)
             previous = existing.get(finding_id)
@@ -129,10 +142,11 @@ class PlatformStore:
                 continue
             serialized = json.dumps(candidate["evidence"], sort_keys=True)
             # Use actual source observation time, not evaluation time, for freshness.
-            verified = min(evaluation["sources"][s]["last_success"] for s in ("directory", "crm"))
+            verified = (min(evaluation["sources"][s]["last_success"] for s in definition.sources)
+                        if definition.lifecycle == "posture" else evaluation["observed_at"])
             if previous is None:
                 db.execute("INSERT INTO findings VALUES (?,?,?,'high','open','current',?,?,?,?,NULL,?,?)",
-                    (finding_id, company, RULE_ID, now, now, now, verified, serialized, reason))
+                    (finding_id, company, rule, now, now, now, verified, serialized, reason))
                 event = "opened"
             else:
                 event = None
@@ -153,7 +167,7 @@ class PlatformStore:
             if event:
                 self._event(db, company, finding_id, event, now, run_id, reason)
         for finding_id, previous in existing.items():
-            if finding_id not in seen:
+            if finding_id not in seen and definition.lifecycle == "posture":
                 self._unverify(db, company, previous, run_id, now,
                                "missing_evidence" if evaluation["coverage_complete"] else "incomplete_coverage")
 
@@ -185,11 +199,14 @@ class PlatformStore:
     def _finding(row, now):
         result = dict(row)
         result["evidence"] = json.loads(result["evidence"])
-        result["evidence_fresh"] = result["assessment"] == "current" and 0 <= now - result["last_verified"] <= 900
+        definition = policy(result["rule"])
+        result["lifecycle"] = definition.lifecycle
+        result["rule_version"] = definition.version
+        result["evidence_fresh"] = result["assessment"] == "current" and (definition.lifecycle == "incident" or 0 <= now - result["last_verified"] <= 900)
         if not result["evidence_fresh"]:
             result["assessment"] = "unknown"
-        result["title"] = "Inactive employee owns an agent with confidential data access"
-        result["suggested_fix"] = "Review ownership and revoke the affected CRM grant if this access is no longer required."
+        result["title"] = ("Inactive employee owns an agent with confidential data access" if result["rule"] == RULE_ID else definition.name)
+        result["suggested_fix"] = definition.suggested_fix
         return result
 
     def findings(self, company, *, status=None, limit=50, offset=0, now=None):
@@ -229,3 +246,62 @@ class PlatformStore:
 
     def audit(self, company, limit=50, offset=0):
         return self._list("audit", company, limit, offset)
+
+    def activity_cursor(self,company):
+        with self.connection() as db:
+            row=db.execute('SELECT cursor FROM activity_import_state WHERE company_id=?',(company,)).fetchone()
+            return row[0] if row else 0
+
+    def import_activity(self,company,page,now):
+        from .webhooks import EVENT
+        if page.get('company_id')!=company:
+            raise ValueError('Wrong policy company')
+        try:
+            uuid.UUID(page['instance_id'])
+            if any(type(page[k]) is not int for k in ('after','next_after','high_watermark')) or not 0<=page['after']<=page['next_after']<=page['high_watermark']:
+                raise ValueError()
+            if len(page['items'])>200: raise ValueError()
+            validated=[]
+            previous=page['after']
+            for item in page['items']:
+                if type(item['id']) is not int or not previous<item['id']<=page['next_after']: raise ValueError()
+                previous=item['id']
+                event=EVENT.validate_python(item['event']).model_dump()
+                if event['company_id']!=company or event['source']!='helio-crm' or event['event_type']!='operation.completed': raise ValueError()
+                validated.append(event)
+        except (KeyError,TypeError,ValueError):
+            raise ValueError('Invalid policy event page') from None
+        with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            state=db.execute('SELECT * FROM activity_import_state WHERE company_id=?',(company,)).fetchone()
+            if state and state['instance_id']!=page['instance_id']: raise ValueError('Policy source reset')
+            cursor=state['cursor'] if state else 0
+            if page['next_after']<=cursor: return
+            if page['after']!=cursor: raise ValueError('Noncontiguous policy import')
+            for event in validated:
+                for rule in {d['rule'] for d in event.get('policy_decisions',[]) if d['result']!='allow'}:
+                    definition=policy(rule)
+                    checks=[d for d in event['policy_decisions'] if d['rule']==rule and d['result']!='allow']
+                    incident_key=next((d.get('incident_key') for d in checks if d.get('incident_key')),None) if rule=='authentication_failures' else None
+                    identity=json.dumps([company,rule,event['source_instance_id'],incident_key or event['request_id']])
+                    finding_id=str(uuid.uuid5(uuid.NAMESPACE_URL,identity))
+                    if db.execute('SELECT 1 FROM findings WHERE id=?',(finding_id,)).fetchone(): continue
+                    evidence={k:event[k] for k in ('source','source_instance_id','event_id','request_id','actor_id','owner_employee_id','resource_id','action','status_code','occurred_at')}
+                    evidence['decisions']=checks
+                    reason=checks[0]['reason']
+                    observed=datetime.fromisoformat(event['occurred_at']).timestamp()
+                    serialized=json.dumps(evidence,sort_keys=True)
+                    db.execute("INSERT INTO findings VALUES (?,?,?,?,'open','current',?,?,?,?,NULL,?,?)",
+                               (finding_id,company,rule,definition.severity,now,now,now,observed,serialized,reason))
+                    self._event(db,company,finding_id,'opened',now,None,reason)
+            db.execute('INSERT OR REPLACE INTO activity_import_state VALUES (?,?,?,?)',
+                       (company,page['instance_id'],page['next_after'],now))
+
+    def set_runtime(self,company,name,value,now):
+        with self.connection() as db:
+            db.execute('INSERT OR REPLACE INTO policy_runtime VALUES (?,?,?,?)',(company,name,json.dumps(value),now))
+
+    def runtime(self,company):
+        with self.connection() as db:
+            return {r['name']:{'value':json.loads(r['value']),'updated_at':r['updated_at']} for r in
+                    db.execute('SELECT * FROM policy_runtime WHERE company_id=?',(company,))}

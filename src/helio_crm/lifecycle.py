@@ -14,7 +14,7 @@ from . import activity
 context = ContextVar('crm_request', default=None)
 log = logging.getLogger(__name__)
 PUBLIC = {'/', '/health', '/docs', '/docs/oauth2-redirect', '/redoc', '/openapi.json'}
-METADATA = {'/accounts', '/grants', '/inventory', '/audit', '/activity/status', '/activity/events'}
+METADATA = {'/accounts', '/grants', '/inventory', '/audit', '/activity/status', '/activity/events', '/identity-projection'}
 
 
 def classify(path):
@@ -24,6 +24,8 @@ def classify(path):
         return '/customers/{id}'
     if re.fullmatch(r'/grants/[^/]+/revoke', path):
         return '/grants/{id}/revoke'
+    if re.fullmatch(r'/principals/[^/]+/access', path):
+        return '/principals/{id}/access'
     return 'unmatched'
 
 
@@ -41,6 +43,8 @@ class ActivityMiddleware:
                    **fields}
         with self.store._operation_connection() as db:
             payload['source_instance_id'] = db.execute("SELECT value FROM metadata WHERE key='activity_source_instance_id'").fetchone()[0]
+            if kind == 'response.completed' and fields.get('completion') == 'completed' and fields.get('status_code',500) < 400:
+                db.execute('UPDATE budget_events SET released=reserved WHERE request_id=?',(ctx['request_id'],))
             activity.persist(db, payload, ctx['request_id'], datetime.now(timezone.utc).isoformat(), self.store.activity_limit)
 
     async def __call__(self, scope, receive, send):
@@ -86,7 +90,7 @@ class ActivityMiddleware:
             status = start['status']
             if status >= 400 and route not in PUBLIC:
                 ctx['stream'] = 'security'
-            check = {'scan_status': 'not_run', 'release_decision': 'allow'}
+            check = {'scan_status': ctx.get('scan_status','not_run'), 'release_decision': 'allow'}
             try:
                 if self.response_check:
                     check = await run_in_threadpool(self.response_check, body, status)

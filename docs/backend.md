@@ -1,7 +1,7 @@
 # Security observation API
 
 The platform now has a running API and background observation worker. It collects
-company metadata, maintains the graph, evaluates a deterministic policy, and
+company metadata, maintains the graph, evaluates deterministic policies, and
 persists findings. It does not yet use an AI model, send Slack notifications,
 approve actions, or modify customer permissions.
 
@@ -106,7 +106,7 @@ not a successful observation. Run results identify individual source failures.
 
 ## Finding lifecycle and evidence
 
-The current policy detects an inactive employee whose agent retains an active
+The existing graph posture policy detects an inactive employee whose agent retains an active
 grant with customer read/write scope to a confidential resource. This policy
 does not cover every company risk or establish a behavioral baseline.
 
@@ -169,3 +169,23 @@ Tests cover authorization, company scoping, bounded queries, durable queuing,
 concurrency, crash recovery, finding transitions, secret-safe failures, and the
 full API → worker → directory/CRM → Neo4j → finding-history flow. Integration
 tests delete only their own `test-*` graph namespaces.
+
+
+## Activity policies and identity publication
+
+Phases 7–13 add an independent policy worker to `security-api`. Its dedicated
+publisher credential can only update the CRM identity projection. It has no CRM
+administrator or customer-access credential. It also observes policy configuration
+and consumes authenticated `/activity/policy-events` pages from the ingest service.
+Import cursors and finding/history changes commit together. Replays deduplicate by
+company, rule, source instance and request (or the stable failure-cooldown identity);
+a reset requires operator review rather
+than silently skipping evidence. Neo4j observation failures do not stop this worker.
+
+`/policies` reports all seven implemented policy definitions, versions, lifecycle
+kinds and observed CRM modes. `/overview` includes publisher/import/configuration
+health. Posture findings retain the 15-minute freshness requirement; historical
+activity incidents do not become unknown merely because their occurrence is old or
+graph coverage is stale. New incidents include redacted decision and request evidence.
+See [CRM policy configuration](crm.md#deterministic-policies-phases-713) for thresholds,
+failure behavior, administration and the deliberately limited detector coverage.

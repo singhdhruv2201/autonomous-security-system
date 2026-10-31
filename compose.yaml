@@ -22,12 +22,20 @@ services:
     environment:
       CRM_DB_PATH: /data/crm.sqlite3
       CRM_ACTIVITY_ENABLED: ${CRM_ACTIVITY_ENABLED:-0}
+      CRM_OWNER_MODE: ${CRM_OWNER_MODE:-off}
+      CRM_VOLUME_MODE: ${CRM_VOLUME_MODE:-off}
+      CRM_FAILURE_MODE: ${CRM_FAILURE_MODE:-off}
+      CRM_CONTENT_MODE: ${CRM_CONTENT_MODE:-off}
+      CRM_REQUEST_LIMIT: ${CRM_REQUEST_LIMIT:-100}
+      CRM_RECORD_LIMIT: ${CRM_RECORD_LIMIT:-100}
+      CRM_BULK_LIMIT: ${CRM_BULK_LIMIT:-50}
       CRM_WEBHOOK_ENABLED: ${CRM_WEBHOOK_ENABLED:-0}
       CRM_WEBHOOK_URL: http://awasi-ingest:8003/webhooks/crm/activity
       CRM_WEBHOOK_ALLOW_LOCAL: "1"
       CRM_WEBHOOK_KEY_ID: ${CRM_WEBHOOK_KEY_ID:-crm-1}
       CRM_WEBHOOK_SECRET: ${CRM_WEBHOOK_SECRET:-}
       HELIO_DIRECTORY_URL: http://simulator:8000
+      CRM_IDENTITY_PUBLISHER_TOKEN: ${CRM_IDENTITY_PUBLISHER_TOKEN:?Run make setup first}
       CRM_ADMIN_TOKEN: ${CRM_ADMIN_TOKEN:?Run make setup first}
       CRM_MAYA_TOKEN: ${CRM_MAYA_TOKEN:?Run make setup first}
       CRM_AGENT_TOKEN: ${CRM_AGENT_TOKEN:?Run make setup first}
@@ -131,6 +139,7 @@ services:
     command: ["uvicorn", "helio_security.api:app", "--host", "0.0.0.0", "--port", "8002"]
     networks: [customer, platform]
     environment:
+      CRM_IDENTITY_PUBLISHER_TOKEN: ${CRM_IDENTITY_PUBLISHER_TOKEN:?Run make setup first}
       SECURITY_DB_PATH: /data/security.sqlite3
       SECURITY_OPERATOR_TOKEN: ${SECURITY_OPERATOR_TOKEN:?Run make setup first}
       SECURITY_VIEWER_TOKEN: ${SECURITY_VIEWER_TOKEN:?Run make setup first}

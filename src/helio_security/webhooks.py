@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, Union
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Query, Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
@@ -54,23 +54,37 @@ class Envelope(BaseModel):
         return value
 
 
+class PolicyDecision(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    rule: Literal['resource_permissions','owner_status','credential_lifecycle','extraction_limits','authentication_failures','sensitive_content']
+    version: Literal[1]
+    incident_key: UUID | None = None
+    mode: Literal['enforce','observe','off']
+    boundary: Literal['request','pre_commit','pre_release']
+    result: Literal['allow','deny','would_deny','unknown']
+    reason: Annotated[str, Field(pattern=r'^[a-z_]{1,80}$')]
+
+
 class Operation(Envelope):
     event_type: Literal['operation.completed']
-    action: Literal['customers:read','customers:write','grants:revoke','accounts:read','grants:read','inventory:read','audit:read','activity:replay','events:read']
-    resource_id: Literal['customer-database','crm-metadata','crm-audit']
+    policy_decisions: Annotated[list[PolicyDecision], Field(max_length=20)] = Field(default_factory=list)
+    action: Literal['access:change','identity:publish','customers:read','customers:write','grants:revoke','accounts:read','grants:read','inventory:read','audit:read','activity:replay','events:read']
+    resource_id: Literal['customer-database','crm-metadata','crm-audit','crm-activity','crm-identity']
     record_id: ID | None
     outcome: Literal['allowed','denied','failed']
     status_code: Annotated[int, Field(ge=100, le=599)]
     reason_code: Literal['operation_completed','authentication_failed','access_denied','resource_not_found','version_conflict','invalid_operation','operation_failed']
     result_record_count: Count | None
-    changed_fields: Annotated[list[Literal['notes','subscription_status','status']], Field(max_length=3)]
+    prepared_record_count: Count = 0
+    record_ids: Annotated[list[ID], Field(max_length=50)] = Field(default_factory=list)
+    changed_fields: Annotated[list[Literal['notes','subscription_status','status','principal_status','credential_status','expires_at']], Field(max_length=3)]
     before_version: Count | None
     after_version: Count | None
 
 
 class HTTPEvent(Envelope):
     method: Literal['GET','HEAD','POST','PATCH','PUT','DELETE','OPTIONS','OTHER']
-    route: Literal['/customers','/customers/{id}','/grants/{id}/revoke','/accounts','/grants','/inventory','/audit','/activity/status','/activity/events','unmatched']
+    route: Literal['/customers','/customers/{id}','/grants/{id}/revoke','/accounts','/grants','/inventory','/audit','/activity/status','/activity/events','/identity-projection','/principals/{id}/access','unmatched']
 
 
 class Received(HTTPEvent):
@@ -83,7 +97,7 @@ class Prepared(HTTPEvent):
     serialized_bytes: Count
     result_record_count: Count | None
     classification: Literal['internal','confidential']
-    scan_status: Literal['not_run','passed','matched']
+    scan_status: Literal['not_run','passed','matched','unknown']
     release_decision: Literal['allow','deny']
 
 
@@ -229,6 +243,14 @@ def create_app(path=None, keys=None, *, clock=time.time, read_tokens=None):
     def list_activity(company=Depends(reader), query=Depends(activity_query)):
         return inbox.activity(company,**query)
 
+    @app.get('/activity/policy-events')
+    def policy_events(after: Annotated[int,Query(ge=0,le=2**53)]=0,
+                      limit: Annotated[int,Query(ge=1,le=200)]=100,company=Depends(reader)):
+        try:
+            return inbox.policy_events(company,after=after,limit=limit)
+        except ValueError:
+            raise HTTPException(409,'Policy cursor regressed') from None
+
     @app.get('/activity/health')
     def activity_health(company=Depends(reader)):
         result = inbox.health(company,now=clock())
@@ -276,7 +298,7 @@ def create_app(path=None, keys=None, *, clock=time.time, read_tokens=None):
             return JSONResponse({'detail':'Invalid delivery authentication'},401)
         try:
             data = json.loads(bytes(body), object_pairs_hook=unique_object)
-            event = EVENT.validate_python(data).model_dump()
+            event = EVENT.validate_python(data).model_dump(exclude_unset=True)
         except (ValueError, TypeError, RecursionError):
             return JSONResponse({'detail':'Invalid activity event'},422)
         if event['company_id'] != connector['company_id'] or event['source'] != connector['source']:

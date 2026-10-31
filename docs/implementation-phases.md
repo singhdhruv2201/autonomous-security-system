@@ -1,9 +1,11 @@
 # Awasi implementation phases
 
-Status: phases 0–6 implemented; phases 7 onward remain proposed. Phase 0–1's
+Status: phases 0–13 implemented; phases 14 onward remain proposed. Phase 0–1's
 [activity contract](crm-activity-contract.md) and the
 [phase 2–4 delivery guide](activity-delivery.md) and
 [phase 5–6 recovery/visibility guide](activity-processing.md) record implemented scope and checks.
+The [CRM policy guide](crm.md#deterministic-policies-phases-713) records phases 7–13,
+their configuration, limits, and acceptance evidence.
 This is the authoritative execution breakdown for the
 [architecture plan](autonomous-security-plan.md); it replaces that plan's earlier
 0/1a/1b/1c phase numbering.
@@ -421,14 +423,15 @@ Production qualification includes the transport/egress configuration already des
 in the relevant phases. This roadmap does not postpone basic authentication,
 redaction, retry safety or atomicity until production.
 
-## Suggested first selection
+## Next selection
 
-Phases **0–6 are complete**; implementation details are recorded in the
+Phases **0–13 are complete**; implementation details are recorded in the
 [activity contract](crm-activity-contract.md), [delivery guide](activity-delivery.md)
-and [recovery/visibility guide](activity-processing.md).
-The next selectable work is **phase 7**, the multiple-policy registry and finding
-lifecycle. Review the activity evidence and local delivery measurements before
-selecting additional policies. This status does not authorize later phases.
+and [recovery/visibility guide](activity-processing.md), plus the
+[CRM policy guide](crm.md#deterministic-policies-phases-713).
+The next selectable work is **phase 14**, durable 15-minute review jobs without a
+model. AI investigation and automatic remedies remain unimplemented. This status
+does not authorize later phases.
 
 Good review checkpoints are: after 2 (complete CRM-side evidence), after 4 (live
 delivery), after 6 (reliable visible environment), after each policy phase, and after

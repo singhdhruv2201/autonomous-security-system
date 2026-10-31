@@ -2,6 +2,7 @@
 
 import json
 import time
+import uuid
 from contextlib import contextmanager
 
 from .webhooks import EVENT, Inbox
@@ -24,6 +25,8 @@ class ActivityStore(Inbox):
     def initialize(self):
         super().initialize()
         with self.transaction() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS activity_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            db.execute("INSERT OR IGNORE INTO activity_metadata VALUES ('instance_id',?)",(str(uuid.uuid4()),))
             db.execute('''CREATE TABLE IF NOT EXISTS activity_worker_state (
                 company_id TEXT NOT NULL, source TEXT NOT NULL, error TEXT, integrity_error TEXT,
                 last_attempt REAL, PRIMARY KEY(company_id,source))''')
@@ -160,7 +163,7 @@ class ActivityStore(Inbox):
             return {'company_id':company, 'enabled':True, 'sources':sources, 'source_resets':resets,
                     'coverage_complete':bool(sources) and not resets and not recovery_error and all(s['coverage_complete'] for s in sources),
                     'recovery_error':recovery_error,
-                    'scanners':'not_run', 'policies_enabled':False}
+                    'scanners':'per_request', 'policies_enabled':None}
 
     def activity(self, company, *, limit=50, before=None, snapshot=None, actor_id=None, outcome=None):
         with self.transaction() as db:
@@ -200,3 +203,17 @@ class ActivityStore(Inbox):
                     'stages':stages})
             return {'company_id':company, 'enabled':True, 'items':items, 'total':total, 'snapshot':snapshot,
                     'next_before':groups[limit-1]['first_id'] if len(groups)>limit else None}
+
+    def policy_events(self, company, *, after=0, limit=100):
+        if not 0 <= after <= 2**53 or not 1 <= limit <= 200:
+            raise ValueError('Invalid policy cursor')
+        with self.transaction() as db:
+            instance=db.execute("SELECT value FROM activity_metadata WHERE key='instance_id'").fetchone()[0]
+            high=db.execute('SELECT coalesce(max(id),0) FROM normalized_events WHERE company_id=?',(company,)).fetchone()[0]
+            if after>high: raise ValueError('Policy cursor regressed')
+            rows=db.execute('SELECT id,payload FROM normalized_events WHERE company_id=? AND id>? ORDER BY id LIMIT ?',
+                            (company,after,limit)).fetchall()
+            return dict(company_id=company,instance_id=instance,after=after,
+                        next_after=rows[-1]['id'] if rows else after,high_watermark=high,
+                        items=[{'id':r['id'],'event':json.loads(r['payload'])} for r in rows
+                               if json.loads(r['payload'])['event_type']=='operation.completed'])

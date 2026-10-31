@@ -9,6 +9,9 @@ The separate security backend observes the directory and CRM through their APIs,
 builds a Neo4j company graph, and persists security findings. Its authenticated
 API runs on port 8002 with a background observation worker. The Awasi dashboard
 on port 3000 shows company security, the graph, agents, apps, policies, and findings.
+Phases 7–13 add a versioned policy registry, inline resource and lifecycle checks,
+rolling extraction/failure limits, and bounded secret/PII scanning. See
+[policy configuration and enforcement](docs/crm.md#deterministic-policies-phases-713).
 AI investigation, Slack, and automated remediation remain later milestones.
 The CRM also has opt-in request/response activity capture and signed background
 webhook delivery, gap recovery, durable processing and a request-level Activity view
@@ -28,7 +31,7 @@ Open **http://localhost:3000** for the Awasi dashboard.
 Use **http://localhost:8000/docs** for the directory or
 **http://localhost:8001/docs** for the CRM API explorer, or
 **http://localhost:8002/docs** for the security platform API.
-`make setup` generates five CRM credentials, two security API tokens, a webhook signing secret, and a Neo4j password in a local `.env` file
+`make setup` generates six CRM credentials, two security API tokens, a webhook signing secret, and a Neo4j password in a local `.env` file
 with owner-only permissions. It preserves existing credentials on repeat runs.
 The file is excluded from Git and Docker build contexts; there is no committed
 credential template. Never share it or the output of `docker compose config`
@@ -52,7 +55,7 @@ to queue an additional refresh, `make security-runs` to track it, and
 make agent              # Reads six synthetic customers and prints a summary
 make update-customer    # Maya updates a customer note using her write grant
 make offboard           # Mark Maya inactive in the company directory
-make agent              # Still succeeds: the agent has a separate credential
+make agent              # With owner enforcement off: separate credential still works
 make grants             # Inspect ownership, scopes, status, and versions
 make revoke-agent       # Administrator revokes the agent's access grant
 make agent              # Expected failure: HTTP 403, exit code 2 from agent
@@ -61,6 +64,8 @@ make audit              # Inspect recorded reads, writes, denials, and revocatio
 
 The `make` command may also exit 2 when a recipe fails; the agent itself exits 2
 for access denial. It exits 1 for configuration/network errors.
+With `CRM_OWNER_MODE=enforce`, fresh directory publication also blocks the owner
+and agent before manual revocation. The default is off; this workstation enables it.
 The walkthrough intentionally leaves Maya inactive and the grant revoked.
 See [CRM details and reset instructions](docs/crm.md) for the access model,
 API contract, and how to repeat the scenario with fresh CRM data.

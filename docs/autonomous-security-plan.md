@@ -3,7 +3,9 @@
 Status: architecture proposed for review, 2026-10-30. Phases 0–6 now have opt-in
 operation/request/response capture, signed delivery, recovery, durable processing
 and activity visibility; see the [implemented recovery guide](activity-processing.md).
-The remaining architecture describes future behavior, not currently active features.
+Phases 7–13 now implement the deterministic policy registry and enforcement families;
+see [CRM policy operation](crm.md#deterministic-policies-phases-713). The AI and remediation
+architecture below remains future behavior.
 Revision: prioritize complete CRM activity capture and authorized webhook delivery
 to Awasi before adding policies; retain request and response enforcement in the target design.
 Execution breakdown: [implementation phases](implementation-phases.md) defines the
@@ -46,15 +48,15 @@ near-real-time notification, not synchronous authorization or guaranteed instant
 | Area | Current behavior | Implication |
 | --- | --- | --- |
 | CRM enforcement | `CRMStore._perform` authenticates and checks access in the transaction that performs the operation | A useful place to add enforcement without a new network hop |
-| CRM operations | Customer list/get/update, account/grant/inventory reads, grant revocation, audit reads, admin delivery replay | Business export/email/webhook, login, OAuth-consent, billing, role-change and MCP remain future integrations |
+| CRM operations | Customer list/get/update, account/grant/inventory reads, grant revocation, audit reads, admin delivery replay, identity publication, principal/credential transitions | Business export/email/webhook, login, OAuth-consent, billing, role-change and MCP remain future integrations |
 | Data model | Six synthetic customers; permissions apply to the resource as a whole | Team/row/field authorization requires additional authoritative metadata |
-| Scope checks | Active grant scopes are combined by principal; the authorization query does not filter grants by resource | Bind scope to canonical resource and application before introducing more resources |
-| Administration | Administrative access uses the principal role | Introduce an explicit principal/credential disable mechanism; revoking an ordinary grant does not disable role-based administration |
-| Graph and posture | Directory/CRM snapshots every 60 seconds; one inactive-owner-agent rule | Keep posture evaluation; add an independent activity pipeline |
-| CRM audit | Legacy audit plus opt-in activity/outbox, signed delivery, scoped cursor recovery and durable normalization | Activity is visible with separate received/processed checkpoints; policies are separate work |
-| Audit coverage | Request/operation/response metadata, counts/bytes, framework failures and observable interruptions; bodies excluded | Scanners remain not_run; missing completion is unknown |
-| Findings | Identity, title, severity, evidence freshness, and reconciliation assume one rule | Generalize persistence and rendering before adding rule families |
-| Workers | One observation worker/process; one active run per company | AI, ingestion, and remediation require separate job types and scheduling |
+| Scope checks | Active grant scopes now match principal, canonical resource and application | The phase-8 resource boundary is enforced |
+| Administration | Administrative access requires a valid active principal/credential before role checks | Explicit versioned disable/revoke/expiry is implemented; ordinary grant revocation remains separate |
+| Graph and posture | Directory/CRM snapshots every 60 seconds; one inactive-owner-agent rule | Posture evaluation and activity policy import run independently |
+| CRM audit | Legacy audit plus opt-in activity/outbox, signed delivery, scoped cursor recovery and durable normalization | Activity includes deterministic decisions and separate received/processed checkpoints |
+| Audit coverage | Request/operation/response metadata, counts/bytes, framework failures and observable interruptions; bodies excluded | Bounded customer scans report actual status; unsupported/disabled scans report not_run; missing completion is unknown |
+| Findings | Versioned policy registry, isolated rule reconciliation, and distinct posture/activity incidents | Existing inactive-owner identities/history are preserved |
+| Workers | Observation worker plus independent identity/configuration/activity-policy worker | AI and remediation scheduling remain future work |
 | Agent | Deterministic read-only Python client | LLM, MCP, and prompt scanning are future integration surfaces |
 
 Code anchors: [CRM store](../src/helio_crm/store.py),
@@ -597,23 +599,17 @@ existing lifecycle events, and source epochs. Backfill old activity as limited-c
 evidence; missing historical record counts must remain unknown. Never reset databases
 or invent old event fields to make the new rules appear complete.
 
-## Proposed scope when policies are approved for implementation
+## Implemented milestones and next selection
 
-**First implement the environment milestone (phases 0–6) when requested:**
-complete activity/response evidence and authorized live delivery. Demonstrate a CRM
-API call becoming durable Awasi evidence automatically, with no manual refresh.
-This milestone does not claim that future policies, scanners, or remediation exist.
+Phases 0–13 are implemented: durable activity delivery and visibility, the policy
+registry, exact permissions, fresh owner status, credential lifecycle, shared
+budgets, repeated-failure throttling, and bounded content scanning. The
+[CRM guide](crm.md#deterministic-policies-phases-713) records current configuration,
+acceptance evidence and limits.
 
-Then implement phases 7–13 as small reviewable policy changes, excluding the AI and
-automatic remediation phases. The policy implementation includes enforcement hooks,
-persistence, and dashboard capability reporting; adding boolean functions alone
-would not enforce the policies.
-
-Phases 0–6 are implemented; the next selectable phase is 7. The detailed roadmap splits CRM
-capture, HTTP response instrumentation, receiver, sender, recovery and visibility
-into separate acceptance boundaries. Later permissions, offboarding, credential
-lifecycle, budgets, failure detection and scanning are also separate phases. Do not
-interpret a milestone group as authorization to implement every phase in it.
+The next selectable phase is 14: durable 15-minute review jobs without a model.
+AI investigation and automatic remediation remain later work. This status does not
+authorize those phases.
 
 Keep future email/export/IdP/OAuth/MCP adapters explicitly unsupported until their
 end-to-end implementation exists. Unit-tested detectors alone are not product

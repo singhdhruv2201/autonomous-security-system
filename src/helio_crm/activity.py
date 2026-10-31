@@ -6,6 +6,8 @@ import uuid
 
 
 RESOURCES = {
+    "access:change": "crm-metadata",
+    "identity:publish": "crm-identity",
     "customers:read": "customer-database",
     "customers:write": "customer-database",
     "grants:revoke": "crm-metadata",
@@ -14,9 +16,9 @@ RESOURCES = {
     "inventory:read": "crm-metadata",
     "audit:read": "crm-audit",
     "activity:replay": "crm-metadata",
-    "events:read": "crm-metadata",
+    "events:read": "crm-activity",
 }
-OPERATIONAL_READS = {"accounts:read", "grants:read", "inventory:read", "audit:read", "activity:replay", "events:read"}
+OPERATIONAL_READS = {"identity:publish","accounts:read", "grants:read", "inventory:read", "audit:read", "activity:replay", "events:read"}
 REASONS = {200: "operation_completed", 401: "authentication_failed", 403: "access_denied",
            404: "resource_not_found", 409: "version_conflict", 422: "invalid_operation"}
 
@@ -74,6 +76,10 @@ def migrate_outbox(db):
 
 
 def record_snapshot(db, action, resource):
+    if action == 'access:change':
+        from .access import state
+        if not db.execute('SELECT 1 FROM principals WHERE id=?',(resource,)).fetchone(): return None
+        return {'id':resource,**state(db,resource)}
     if action in {"customers:read", "customers:write"}:
         row = db.execute("SELECT id, notes, subscription_status, version FROM customers WHERE id=?",
                          (resource,)).fetchone()
@@ -85,13 +91,14 @@ def record_snapshot(db, action, resource):
 
 
 def append(db, *, request_id, occurred_at, principal, action, resource,
-           status, outcome, result, before, limit):
+           status, outcome, result, before, limit, decisions=(), prepared_count=0, record_ids=()):
     """Persist metadata only. Never serialize the operation arguments, results or error."""
     operational = action in OPERATIONAL_READS and status == 200
     changed, before_version, after_version = [], None, None
-    if status == 200 and before is not None and action in {"customers:write", "grants:revoke"}:
+    if status == 200 and before is not None and action in {"customers:write", "grants:revoke", "access:change"}:
         after = record_snapshot(db, action, resource)
-        fields = ("notes", "subscription_status") if action == "customers:write" else ("status",)
+        fields = (("notes", "subscription_status") if action == "customers:write" else
+                  ("principal_status","credential_status","expires_at") if action == "access:change" else ("status",))
         changed = [field for field in fields if before[field] != after[field]]
         before_version, after_version = before["version"], after["version"]
     payload = {
@@ -109,11 +116,18 @@ def append(db, *, request_id, occurred_at, principal, action, resource,
         "reason_code": REASONS.get(status, "operation_failed"),
         "result_record_count": (len(result) if isinstance(result, list) else 1)
         if status == 200 and action == "customers:read" else None,
+        "policy_decisions": list(decisions),
+        "prepared_record_count": prepared_count,
+        "record_ids": list(record_ids),
         "changed_fields": changed, "before_version": before_version, "after_version": after_version,
     }
     from .lifecycle import context
     ctx = context.get()
     if ctx is not None:
+        scans=[d for d in decisions if d['rule']=='sensitive_content']
+        if scans:
+            ctx['scan_status'] = ('unknown' if any(d['result']=='unknown' for d in scans) else
+                                  'matched' if any(d['result']!='allow' for d in scans) else 'passed')
         ctx.update({key: payload[key] for key in ('actor_id', 'actor_kind', 'owner_employee_id', 'result_record_count')})
     persist(db, payload, request_id, occurred_at, limit)
 
