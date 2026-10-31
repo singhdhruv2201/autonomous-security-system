@@ -5,6 +5,47 @@ from test_graph import serve
 from test_webhooks import receiver
 
 
+def test_background_sender_drains_ready_events_before_idle_wait(activity_crm):
+    from threading import Event
+    from helio_crm.webhook_worker import DeliveryWorker
+    store, tokens = activity_crm
+    for _ in range(4):
+        store.list_customers(tokens['agent'])
+    pending_at_wait = []
+
+    class StopAtIdle(Event):
+        def wait(self, timeout=None):
+            with store.connection() as db:
+                pending_at_wait.append(db.execute("SELECT count(*) FROM activity_outbox WHERE status!='delivered'").fetchone()[0])
+            self.set()
+            return True
+
+    worker = DeliveryWorker(store, 'https://example.test/webhooks/crm/activity', 'crm-1', 'x'*32,
+                            transport=lambda *args: (202, None))
+    worker.stop_event = StopAtIdle()
+    worker._loop()
+    assert pending_at_wait == [0], 'Ready evidence must not wait an extra polling interval per event'
+
+
+def test_background_sender_backs_off_after_storage_failure(activity_crm, monkeypatch):
+    from threading import Event
+    from helio_crm.webhook_worker import DeliveryWorker
+    calls = []
+    class StopAtIdle(Event):
+        def wait(self, timeout=None):
+            calls.append(('wait', timeout))
+            self.set()
+            return True
+    def broken():
+        calls.append(('claim', None))
+        raise OSError('storage unavailable')
+    worker = DeliveryWorker(activity_crm[0], 'https://example.test/webhooks/crm/activity', 'crm-1', 'x'*32)
+    monkeypatch.setattr(worker, 'run_once', broken)
+    worker.stop_event = StopAtIdle()
+    worker._loop()
+    assert calls == [('claim', None), ('wait', .25)]
+
+
 def test_real_http_delivery_and_restart(activity_crm,tmp_path):
     from helio_crm.webhook_worker import DeliveryWorker
     store,tokens = activity_crm
@@ -148,7 +189,8 @@ def test_replay_audits_authorized_actor_and_exact_target(activity_crm):
         assert tuple(row)==('service:crm-admin',1,'replayed')
 
 
-def test_background_delivery_of_complete_http_lifecycle(tmp_path,directory,monkeypatch):
+@pytest.mark.parametrize('requests', [1, 8])
+def test_background_delivery_of_complete_http_lifecycle(tmp_path,directory,monkeypatch,requests):
     import sqlite3,time,urllib.request
     from helio_crm.api import create_app
     from helio_crm.store import CRMStore
@@ -160,18 +202,22 @@ def test_background_delivery_of_complete_http_lifecycle(tmp_path,directory,monke
         monkeypatch.setenv('CRM_WEBHOOK_URL',receiver_url+'/webhooks/crm/activity')
         monkeypatch.setenv('CRM_WEBHOOK_SECRET',key)
         with serve(create_app(tmp_path/'crm.sqlite3',tokens,directory.employees,activity_enabled=True)) as crm_url:
-            req=urllib.request.Request(crm_url+'/customers',headers={'Authorization':'Bearer '+tokens['agent']})
-            with urllib.request.urlopen(req,timeout=5) as response: assert response.status==200
-            deadline=time.monotonic()+5
+            from concurrent.futures import ThreadPoolExecutor
+            def read(_):
+                req=urllib.request.Request(crm_url+'/customers',headers={'Authorization':'Bearer '+tokens['agent']})
+                with urllib.request.urlopen(req,timeout=5) as response: assert response.status==200
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(read, range(requests)))
+            deadline=time.monotonic()+10
             while time.monotonic()<deadline:
                 with sqlite3.connect(tmp_path/'inbox.sqlite3') as db: count=db.execute('SELECT count(*) FROM inbox').fetchone()[0]
-                if count==4: break
+                if count==4*requests: break
                 time.sleep(0.01)
-            assert count==4
+            assert count==4*requests
     with sqlite3.connect(tmp_path/'inbox.sqlite3') as db:
         payloads=[row[0] for row in db.execute('SELECT payload FROM inbox')]
         assert all(tokens['agent'] not in p for p in payloads)
-    assert len(events(CRMStore(tmp_path/'crm.sqlite3')))==4
+    assert len(events(CRMStore(tmp_path/'crm.sqlite3')))==4*requests
 
 
 def test_http_replay_rejects_unbounded_sequence(tmp_path,directory):

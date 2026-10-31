@@ -119,11 +119,14 @@ class DeliveryWorker:
 
     def _loop(self):
         while not self.stop_event.is_set():
+            worked = False
             try:
-                self.run_once()
+                worked = self.run_once()
             except Exception:
                 log.error('CRM webhook worker storage unavailable')
-            self.stop_event.wait(0.25)
+            # Poll when idle; ready events already have durable retry/lease bounds.
+            if not worked:
+                self.stop_event.wait(0.25)
 
     def stop(self):
         self.stop_event.set()
