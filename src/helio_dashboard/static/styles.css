@@ -2467,3 +2467,34 @@ input::placeholder {
     gap: 0 13px;
   }
 }
+/* Activity shares the workspace typography, with request evidence kept together. */
+.activity-health, .activity-list { background: #fff; border: 1px solid #e6e8e6; border-radius: 16px; margin-bottom: 24px; overflow: hidden; }
+.activity-health { padding: 24px; }
+.activity-source { border-top: 1px solid #edf0ed; padding: 18px 0; }
+.activity-source-title, .activity-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.activity-source-title h2, .activity-list-heading h2 { font-size: 17px; margin: 0; }
+.activity-source-title small, .activity-source-note, .activity-epoch { color: #64716d; font-size: 12px; }
+.activity-metrics { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin: 20px 0; }
+.activity-metrics dt { color: #64716d; font-size: 12px; }
+.activity-metrics dd { font-size: 23px; margin: 6px 0 0; }
+.activity-warning { color: #86511d; font-size: 13px; }
+.activity-list-heading { padding: 20px 24px; }
+#activity-filter-form { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+#activity-filter-form label { display: grid; gap: 6px; color: #64716d; font-size: 12px; }
+#activity-filter-form input, #activity-filter-form select { border: 1px solid #dce2df; border-radius: 8px; padding: 9px 10px; background: white; color: #253c33; font: inherit; }
+.activity-labels, .activity-request summary { display: grid; grid-template-columns: 1.4fr 1.3fr 1fr .7fr .9fr; gap: 16px; padding: 16px 24px; }
+.activity-labels { color: #64716d; font-size: 11px; background: #f8faf8; }
+.activity-request { border-top: 1px solid #edf0ed; font-size: 13px; }
+.activity-request summary { cursor: pointer; list-style: none; align-items: center; }
+.activity-request summary:hover { background: #fafcfb; }
+.activity-request summary small { display: block; margin-top: 6px; color: #64716d; font-size: 11px; }
+.activity-actor, .activity-epoch { overflow-wrap: anywhere; }
+.activity-evidence { background: #f8faf8; padding: 12px 28px; color: #52625a; }
+.activity-evidence p { font-size: 12px; overflow-wrap: anywhere; }
+.activity-evidence ol { padding-left: 20px; }
+.activity-evidence li { padding: 12px 0; }
+.activity-evidence li > span { display: block; font-size: 11px; margin-top: 5px; }
+.activity-evidence dl { display: flex; flex-wrap: wrap; gap: 12px 24px; font-size: 12px; }
+.activity-evidence dd { margin: 3px 0; font-weight: 600; color: #253c33; }
+.activity-more { text-align: center; padding: 20px; }
+@media (max-width: 900px) { .activity-metrics { grid-template-columns: repeat(3, 1fr); } .activity-labels { display:none; } .activity-request summary { grid-template-columns: 1fr 1fr; } }

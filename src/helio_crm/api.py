@@ -6,6 +6,7 @@ import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -122,6 +123,19 @@ def create_app(db_path=None, tokens=None, employees_loader=None, *, activity_ena
         if body or sequence < 1:
             raise CRMError(422, 'Invalid replay request')
         return store.replay_delivery(token(credentials), sequence)
+
+    @app.get('/activity/status', tags=['Activity recovery'])
+    def activity_status(credentials: Credentials):
+        return store.activity_feed(token(credentials), status_only=True)
+
+    @app.get('/activity/events', tags=['Activity recovery'])
+    def activity_events(credentials: Credentials,
+                        after: Annotated[int, Query(ge=0, le=2**53)] = 0,
+                        through: Annotated[int | None, Query(ge=0, le=2**53)] = None,
+                        source_instance_id: UUID | None = None,
+                        limit: Annotated[int, Query(ge=1, le=200)] = 100):
+        return store.activity_feed(token(credentials), after=after, through=through, limit=limit,
+                                   source_instance_id=str(source_instance_id) if source_instance_id else None)
 
     return app
 

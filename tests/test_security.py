@@ -145,7 +145,7 @@ def test_setup_is_private_repeatable_and_preserves_all_secrets(tmp_path):
     setup(path)
     assert path.read_text() == first
     entries = dict(line.split("=", 1) for line in first.splitlines() if "=" in line)
-    assert len(entries) == 8 and len(set(entries.values())) == 8
+    assert len(entries) == 9 and len(set(entries.values())) == 9
     assert len(entries["SECURITY_OPERATOR_TOKEN"]) >= 32
     assert len(entries["SECURITY_VIEWER_TOKEN"]) >= 32
     assert len(entries["NEO4J_PASSWORD"]) >= 32
@@ -162,7 +162,7 @@ def test_setup_adds_api_tokens_without_rotating_existing_environment(tmp_path):
     setup(path)
     after = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
     assert all(after[k] == v for k, v in before.items())
-    assert len(after) == 8
+    assert len(after) == 9
 
 
 def test_setup_rejects_invalid_existing_platform_token_without_rotating_it(tmp_path):

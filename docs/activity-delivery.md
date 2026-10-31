@@ -1,5 +1,8 @@
 # CRM activity capture and webhook delivery — phases 2–4
 
+This guide records the phase-2/4 transport boundary. Phases 5–6 now add recovery,
+processing and dashboard visibility; use the [current startup and recovery guide](activity-processing.md).
+
 The CRM captures request, operation, prepared response and observed response
 completion. A background sender delivers security events to an independent Awasi
 inbox. Receipt means **durably stored, pending processing**. Event processing,

@@ -1,6 +1,7 @@
 """Authenticated observation API for the future dashboard and investigation agent."""
 
 import hmac
+import os
 import sqlite3
 import time
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from .reader import GraphReader
 from .settings import Settings
 from .worker import ObservationWorker
 from .rules import RULE_ID
+from .activity_client import ActivityClient, ActivityUnavailable, activity_query
 
 bearer = HTTPBearer(auto_error=False)
 Limit = Annotated[int, Query(ge=1, le=200)]
@@ -31,7 +33,7 @@ class SyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def create_app(settings=None, *, graph=None, store=None, reader=None, start_worker=True):
+def create_app(settings=None, *, graph=None, store=None, reader=None, start_worker=True, activity_client=None):
     @asynccontextmanager
     async def lifespan(app):
         configured = settings or Settings.from_environment()
@@ -57,6 +59,8 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
                 worker.start()
             app.state.services = SimpleNamespace(settings=configured, graph=platform_graph,
                 store=platform_store, reader=platform_reader, worker=worker)
+            activity_url = os.getenv('AWASI_ACTIVITY_URL','')
+            app.state.activity_client = activity_client or (ActivityClient(activity_url,configured.viewer_token) if activity_url else None)
             yield
         finally:
             if worker:
@@ -70,7 +74,7 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
     async def unavailable(request, error):
         return JSONResponse(status_code=503, content={"detail": "Security data is temporarily unavailable"})
 
-    for error in (Neo4jError, DriverError, sqlite3.Error, OSError):
+    for error in (Neo4jError, DriverError, sqlite3.Error, OSError, ActivityUnavailable):
         app.add_exception_handler(error, unavailable)
 
     def principal(request: Request, credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
@@ -116,7 +120,7 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
         company = identity["company_id"]
         return {**service.graph.status(),
                 "observation": {"interval_seconds": service.settings.sync_interval, "agentic": False,
-                                "activity_ingestion": False, "remediation_enabled": False},
+                                "activity_ingestion": app.state.activity_client is not None, "remediation_enabled": False},
                 "finding_counts": {state: service.store.findings(company, status=state, limit=1)["total"]
                                    for state in ("open", "resolved")},
                 "latest_sync_run": next(iter(service.store.runs(company, limit=1)["items"]), None)}
@@ -131,6 +135,20 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
                            "Target resource is confidential"],
             "suggested_fix": "Review ownership and revoke the affected CRM grant if access is no longer required.",
             "coverage": "Requires fresh directory and CRM evidence. Missing evidence never resolves a finding."}]}
+
+    @app.get('/activity', tags=['Activity'])
+    def list_activity(identity=Depends(principal), query=Depends(activity_query)):
+        client = app.state.activity_client
+        if client is None:
+            return {'company_id':identity['company_id'],'enabled':False,'items':[],'total':0,'next_before':None,'snapshot':0}
+        return client.get('/activity',identity['company_id'],query)
+
+    @app.get('/activity/health', tags=['Activity'])
+    def activity_health(identity=Depends(principal)):
+        client = app.state.activity_client
+        if client is None:
+            return {'company_id':identity['company_id'],'enabled':False,'sources':[],'coverage_complete':False,'worker_running':False}
+        return client.get('/activity/health',identity['company_id'])
 
     @app.get("/connectors", tags=["Observation"])
     def connectors(identity=Depends(principal), service=Depends(services)):

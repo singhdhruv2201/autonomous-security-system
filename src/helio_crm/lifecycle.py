@@ -14,7 +14,7 @@ from . import activity
 context = ContextVar('crm_request', default=None)
 log = logging.getLogger(__name__)
 PUBLIC = {'/', '/health', '/docs', '/docs/oauth2-redirect', '/redoc', '/openapi.json'}
-METADATA = {'/accounts', '/grants', '/inventory', '/audit'}
+METADATA = {'/accounts', '/grants', '/inventory', '/audit', '/activity/status', '/activity/events'}
 
 
 def classify(path):

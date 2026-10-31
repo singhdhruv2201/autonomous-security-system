@@ -18,6 +18,9 @@ service on the platform network, outside the simulated customer environment.
 - **Policies:** the actual enabled access rule and its four conditions. Read-only.
 - **Findings:** open/resolved filters, search, source evidence, suggested fix, and
   persisted finding history. No approval or remediation execution controls yet.
+- **Activity:** opt-in correlated CRM requests, expandable lifecycle evidence,
+  actor/outcome filters, cursor pagination, queue health and processing/gap indicators.
+  Follow [activity setup and recovery](activity-processing.md) to enable this view.
 
 Global search opens company entity details. **Refresh observations** queues a
 real security API job and follows its completion. The view fetches updates every
@@ -26,8 +29,8 @@ default. Persistent findings are updated, not duplicated on every refresh.
 
 Company monitoring currently displays **observed metadata state** and genuine
 sync events. An employee's last-observed time is not the time they performed an
-action. CRM request-level audit events, Slack, AI investigation, and approved fixes
-remain separate future milestones. If the demo agent grant is already revoked,
+action. Request-level CRM evidence is in the separate **Activity** tab; Slack, AI
+investigation and approved fixes remain future milestones. If the demo agent grant is already revoked,
 zero open findings is expected; see the CRM walkthrough for the scenario.
 
 ## Architecture and access
@@ -53,7 +56,7 @@ read company metadata and request observations. Do not deploy this gateway as a
 public or multi-user service without adding authentication and authorization.
 
 The initial UI reads up to 200 entities, 200 findings, and 500 graph edges, enough
-for the current 54-entity demo. Truncation is indicated; server-side search and
+for the current small demo (54 entities, or 57 with the recovery reader). Truncation is indicated; server-side search and
 pagination are a future extension for larger companies. Only the latest 12 sync
 runs are included in the monitoring feed.
 

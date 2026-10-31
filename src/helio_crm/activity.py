@@ -14,8 +14,9 @@ RESOURCES = {
     "inventory:read": "crm-metadata",
     "audit:read": "crm-audit",
     "activity:replay": "crm-metadata",
+    "events:read": "crm-metadata",
 }
-OPERATIONAL_READS = {"accounts:read", "grants:read", "inventory:read", "audit:read", "activity:replay"}
+OPERATIONAL_READS = {"accounts:read", "grants:read", "inventory:read", "audit:read", "activity:replay", "events:read"}
 REASONS = {200: "operation_completed", 401: "authentication_failed", 403: "access_denied",
            404: "resource_not_found", 409: "version_conflict", 422: "invalid_operation"}
 

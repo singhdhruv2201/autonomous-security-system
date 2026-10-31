@@ -32,6 +32,7 @@ services:
       CRM_MAYA_TOKEN: ${CRM_MAYA_TOKEN:?Run make setup first}
       CRM_AGENT_TOKEN: ${CRM_AGENT_TOKEN:?Run make setup first}
       CRM_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
+      CRM_RECOVERY_TOKEN: ${CRM_RECOVERY_TOKEN:?Run make setup first}
     depends_on:
       simulator:
         condition: service_healthy
@@ -57,6 +58,11 @@ services:
       CRM_WEBHOOK_SECRET: ${CRM_WEBHOOK_SECRET:-}
       CRM_WEBHOOK_PREVIOUS_KEY_ID: ${CRM_WEBHOOK_PREVIOUS_KEY_ID:-crm-previous}
       CRM_WEBHOOK_PREVIOUS_SECRET: ${CRM_WEBHOOK_PREVIOUS_SECRET:-}
+      AWASI_ACTIVITY_WORKER_ENABLED: ${AWASI_ACTIVITY_WORKER_ENABLED:-0}
+      CRM_URL: http://crm:8001
+      CRM_RECOVERY_TOKEN: ${CRM_RECOVERY_TOKEN:?Run make setup first}
+      SECURITY_OPERATOR_TOKEN: ${SECURITY_OPERATOR_TOKEN:?Run make setup first}
+      SECURITY_VIEWER_TOKEN: ${SECURITY_VIEWER_TOKEN:?Run make setup first}
     ports:
       - "127.0.0.1:8003:8003"
     volumes:
@@ -129,6 +135,7 @@ services:
       SECURITY_OPERATOR_TOKEN: ${SECURITY_OPERATOR_TOKEN:?Run make setup first}
       SECURITY_VIEWER_TOKEN: ${SECURITY_VIEWER_TOKEN:?Run make setup first}
       SECURITY_SYNC_INTERVAL: ${SECURITY_SYNC_INTERVAL:-60}
+      AWASI_ACTIVITY_URL: ${AWASI_ACTIVITY_URL:-}
       HELIO_DIRECTORY_URL: http://simulator:8000
       CRM_URL: http://crm:8001
       CRM_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}

@@ -107,7 +107,7 @@ are recorded after collecting their result, so their own record appears on the
 next read. The audit table is a local append-only application convention, not
 tamper-proof storage.
 
-## Durable activity and delivery (phases 0–4)
+## Durable activity and delivery (phases 0–6)
 
 Schema v4 includes `activity_events`, `activity_outbox`, `operational_events` and
 `delivery_audit`, extending v3 with durable delivery state and leases.
@@ -156,10 +156,11 @@ The database is application-append-only, not tamper-proof.
 
 Framework-rejected requests, public routes, response sizes and observable interruptions
 are covered. Response checks report `not_run` until scanners exist. Optional signed
-webhooks persist events in a separate Awasi inbox; replay is admin-only. Recovery
-readers, inbox processing and the activity UI remain later phases. See the delivery
-guide for enablement, rotation, outage handling and the exact limits of completion
-evidence.
+webhooks persist events in a separate Awasi inbox; replay is admin-only. A dedicated
+`events:read` principal can read the scoped recovery feed, and Awasi processes and
+displays correlated requests. See [recovery and activity visibility](activity-processing.md)
+for current enablement, grants, watermarks and coverage semantics. The delivery guide
+still describes rotation, replay and the limits of completion evidence.
 
 Focused checks:
 

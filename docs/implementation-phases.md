@@ -1,8 +1,9 @@
 # Awasi implementation phases
 
-Status: phases 0–4 implemented; phases 5 onward remain proposed. Phase 0–1's
+Status: phases 0–6 implemented; phases 7 onward remain proposed. Phase 0–1's
 [activity contract](crm-activity-contract.md) and the
-[phase 2–4 delivery guide](activity-delivery.md) record implemented scope and checks.
+[phase 2–4 delivery guide](activity-delivery.md) and
+[phase 5–6 recovery/visibility guide](activity-processing.md) record implemented scope and checks.
 This is the authoritative execution breakdown for the
 [architecture plan](autonomous-security-plan.md); it replaces that plan's earlier
 0/1a/1b/1c phase numbering.
@@ -420,12 +421,12 @@ redaction, retry safety or atomicity until production.
 
 ## Suggested first selection
 
-Phases **0–4 are complete**; implementation details are recorded in the
-[activity contract](crm-activity-contract.md) and [delivery guide](activity-delivery.md).
-The next selectable work is **phase 5**, gap recovery and resumable processing.
-Continue through phase 6 one bounded phase
-at a time. At that point, review real activity and delivery measurements before
-choosing the first additional policy. This status does not authorize later phases.
+Phases **0–6 are complete**; implementation details are recorded in the
+[activity contract](crm-activity-contract.md), [delivery guide](activity-delivery.md)
+and [recovery/visibility guide](activity-processing.md).
+The next selectable work is **phase 7**, the multiple-policy registry and finding
+lifecycle. Review the activity evidence and local delivery measurements before
+selecting additional policies. This status does not authorize later phases.
 
 Good review checkpoints are: after 2 (complete CRM-side evidence), after 4 (live
 delivery), after 6 (reliable visible environment), after each policy phase, and after

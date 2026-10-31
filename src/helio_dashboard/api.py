@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
+from urllib.parse import urlencode
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -11,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from .gateway import Gateway, UpstreamError
+from helio_security.activity_client import activity_query
 
 ASSETS = Path(__file__).parent / "static"
 
@@ -71,6 +73,14 @@ def create_app(gateway=None):
     @app.get("/api/findings/{finding_id}")
     def finding(finding_id: UUID, request: Request):
         return request.app.state.gateway.request("/findings/" + str(finding_id))[1]
+
+    @app.get('/api/activity')
+    def activity(request: Request, query=Depends(activity_query)):
+        return request.app.state.gateway.request('/activity?'+urlencode(query))[1]
+
+    @app.get('/api/activity/health')
+    def activity_health(request: Request):
+        return request.app.state.gateway.request('/activity/health')[1]
 
     app.mount("/assets", StaticFiles(directory=ASSETS), name="assets")
     return app

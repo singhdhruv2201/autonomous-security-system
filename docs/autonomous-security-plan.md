@@ -1,8 +1,8 @@
 # Awasi autonomous security architecture and implementation plan
 
-Status: architecture proposed for review, 2026-10-30. Phases 0–4 now have opt-in
-operation/request/response capture and signed background delivery to a durable inbox;
-see the [implemented delivery guide](activity-delivery.md).
+Status: architecture proposed for review, 2026-10-30. Phases 0–6 now have opt-in
+operation/request/response capture, signed delivery, recovery, durable processing
+and activity visibility; see the [implemented recovery guide](activity-processing.md).
 The remaining architecture describes future behavior, not currently active features.
 Revision: prioritize complete CRM activity capture and authorized webhook delivery
 to Awasi before adding policies; retain request and response enforcement in the target design.
@@ -51,7 +51,7 @@ near-real-time notification, not synchronous authorization or guaranteed instant
 | Scope checks | Active grant scopes are combined by principal; the authorization query does not filter grants by resource | Bind scope to canonical resource and application before introducing more resources |
 | Administration | Administrative access uses the principal role | Introduce an explicit principal/credential disable mechanism; revoking an ordinary grant does not disable role-based administration |
 | Graph and posture | Directory/CRM snapshots every 60 seconds; one inactive-owner-agent rule | Keep posture evaluation; add an independent activity pipeline |
-| CRM audit | Legacy audit plus opt-in transactional activity/outbox and signed delivery to a separate inbox | Authorized cursor recovery and processing remain phase 5 |
+| CRM audit | Legacy audit plus opt-in activity/outbox, signed delivery, scoped cursor recovery and durable normalization | Activity is visible with separate received/processed checkpoints; policies are separate work |
 | Audit coverage | Request/operation/response metadata, counts/bytes, framework failures and observable interruptions; bodies excluded | Scanners remain not_run; missing completion is unknown |
 | Findings | Identity, title, severity, evidence freshness, and reconciliation assume one rule | Generalize persistence and rendering before adding rule families |
 | Workers | One observation worker/process; one active run per company | AI, ingestion, and remediation require separate job types and scheduling |
@@ -609,7 +609,7 @@ automatic remediation phases. The policy implementation includes enforcement hoo
 persistence, and dashboard capability reporting; adding boolean functions alone
 would not enforce the policies.
 
-Phases 0–4 are implemented; the next selectable phase is 5. The detailed roadmap splits CRM
+Phases 0–6 are implemented; the next selectable phase is 7. The detailed roadmap splits CRM
 capture, HTTP response instrumentation, receiver, sender, recovery and visibility
 into separate acceptance boundaries. Later permissions, offboarding, credential
 lifecycle, budgets, failure detection and scanning are also separate phases. Do not

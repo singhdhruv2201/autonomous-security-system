@@ -64,7 +64,8 @@ class CRMStore:
     def initialize(self, employees, tokens):
         validate_credentials(tokens)
         principals = {"admin": "service:crm-admin", "maya": "employee:emp-maya-chen",
-                      "agent": "agent:sales-research", "observer": "service:security-observer"}
+                      "agent": "agent:sales-research", "observer": "service:security-observer",
+                      "recovery": "service:activity-reader"}
         if self.is_initialized():
             with self.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -74,7 +75,7 @@ class CRMStore:
                 existing = {r["principal_id"]: r["token_hash"] for r in db.execute("SELECT * FROM credentials")}
                 expected = {principals[k]: token_hash(v) for k, v in tokens.items()}
                 if any(expected.get(k) != v for k, v in existing.items()) or any(
-                    k not in existing for k in expected if k != "service:security-observer"
+                    k not in existing for k in expected if k not in {"service:security-observer", "service:activity-reader"}
                 ):
                     raise ValueError("Configured credentials do not match stored credentials; restore the original .env")
                 if version == "1":
@@ -82,6 +83,8 @@ class CRMStore:
                     db.execute("UPDATE metadata SET value='2' WHERE key='schema_version'")
                 if "observer" in tokens and "service:security-observer" not in existing:
                     self._add_observer(db, tokens["observer"])
+                if "recovery" in tokens and "service:activity-reader" not in existing:
+                    self._add_recovery_reader(db, tokens["recovery"])
                 if version in {"1", "2"}:
                     activity.initialize(db)
                     db.execute("UPDATE metadata SET value='3' WHERE key='schema_version'")
@@ -131,7 +134,7 @@ class CRMStore:
             db.execute("INSERT INTO principals VALUES ('agent:sales-research', 'Sales Research Agent', 'agent', 'emp-maya-chen', 'user')")
             db.execute("INSERT INTO principals VALUES ('service:crm-admin', 'CRM Administration', 'service', 'emp-casey-wong', 'admin')")
             db.executemany("INSERT INTO credentials VALUES (?, ?)",
-                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key != "observer"])
+                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key not in {"observer", "recovery"}])
             db.executemany("INSERT INTO grants (id,principal_id,scopes,status,version) VALUES (?, ?, ?, 'active', 1)", [
                 ("grant-sales-agent", "agent:sales-research", json.dumps(["customers:read"])),
                 ("grant-maya", "employee:emp-maya-chen", json.dumps(["customers:read", "customers:write"])),
@@ -150,9 +153,18 @@ class CRMStore:
             ])
             if "observer" in tokens:
                 self._add_observer(db, tokens["observer"])
+            if "recovery" in tokens:
+                self._add_recovery_reader(db, tokens["recovery"])
             activity.initialize(db)
             activity.migrate_outbox(db)
             db.execute("INSERT INTO metadata VALUES ('schema_version', '4')")
+
+    @staticmethod
+    def _add_recovery_reader(db, token):
+        db.execute("INSERT INTO principals VALUES ('service:activity-reader', 'Activity Reader', 'service', 'emp-casey-wong', 'user')")
+        db.execute("INSERT INTO credentials VALUES (?, 'service:activity-reader')", (token_hash(token),))
+        db.execute("INSERT INTO grants VALUES ('grant-activity-reader', 'service:activity-reader', ?, 'active', 1, 'crm-activity')",
+                   (json.dumps(['events:read']),))
 
     @staticmethod
     def _add_observer(db, token):
@@ -175,7 +187,7 @@ class CRMStore:
             # could not be committed, or expose database/trigger exception text.
             raise CRMError(503, "CRM storage is temporarily unavailable") from None
 
-    def _perform(self, token, action, resource, operation, *, admin=False, metadata=False):
+    def _perform(self, token, action, resource, operation, *, admin=False, metadata=False, grant_resource=None):
         error, result, actor = None, None, None
         with self._operation_connection() as db:
             # Serialize authorization with mutations: revocation takes effect before
@@ -193,7 +205,8 @@ class CRMStore:
                         raise CRMError(403, "Administrator credential required")
                 elif not (metadata and principal["role"] == "admin"):
                     scopes = {scope for row in db.execute(
-                        "SELECT scopes FROM grants WHERE principal_id=? AND status='active'", (actor,)
+                        "SELECT scopes FROM grants WHERE principal_id=? AND status='active' AND (? IS NULL OR resource_id=?)",
+                        (actor, grant_resource, grant_resource)
                     ) for scope in json.loads(row["scopes"])}
                     if action not in scopes:
                         raise CRMError(403, "No active grant permits this operation")
@@ -228,6 +241,35 @@ class CRMStore:
         if error:
             raise error
         return result
+
+    def activity_feed(self, token, *, status_only=False, after=0, through=None, source_instance_id=None, limit=100):
+        def read(db):
+            epoch = db.execute("SELECT value FROM metadata WHERE key='activity_source_instance_id'").fetchone()[0]
+            high = db.execute("SELECT seq FROM sqlite_sequence WHERE name='activity_events'").fetchone()
+            high = high[0] if high else 0
+            earliest = db.execute('SELECT min(sequence) FROM activity_events').fetchone()[0] or high + 1
+            queue = dict.fromkeys(('pending', 'inflight', 'delivered', 'dead_letter'), 0)
+            queue.update(dict(db.execute('SELECT status,count(*) FROM activity_outbox GROUP BY status')))
+            result = {'schema_version':1, 'company_id':'helio', 'source':'helio-crm',
+                      'source_instance_id':epoch, 'high_watermark':high, 'earliest_available':earliest,
+                      'capture_enabled':self.activity_enabled, 'queue':queue,
+                      'retained_events':db.execute('SELECT count(*) FROM activity_events').fetchone()[0],
+                      'capacity':self.activity_limit}
+            if status_only:
+                return result
+            if source_instance_id is not None and source_instance_id != epoch:
+                raise CRMError(409, 'Activity source changed')
+            if after < earliest - 1:
+                raise CRMError(410, 'Activity history expired')
+            watermark = high if through is None else through
+            if not 0 <= after <= watermark <= high or not 1 <= limit <= 200:
+                raise CRMError(422, 'Invalid activity cursor')
+            rows = db.execute('SELECT * FROM activity_events WHERE sequence>? AND sequence<=? ORDER BY sequence LIMIT ?',
+                              (after, watermark, limit)).fetchall()
+            items = [{**json.loads(row['payload']), **{k:row[k] for k in row.keys() if k != 'payload'}} for row in rows]
+            cursor = items[-1]['sequence'] if items else after
+            return {**result, 'through':watermark, 'items':items, 'next_after':cursor, 'has_more':cursor < watermark}
+        return self._perform(token, 'events:read', 'crm-activity', read, grant_resource='crm-activity')
 
     def list_customers(self, token):
         return self._perform(token, "customers:read", "customers",
@@ -288,11 +330,14 @@ class CRMStore:
 
     def inventory(self, token):
         def snapshot(db):
+            resources = [
+                {"id": "customer-database", "name": "Customer database", "classification": "confidential"},
+                {"id": "crm-metadata", "name": "CRM access metadata", "classification": "internal"}]
+            if db.execute("SELECT 1 FROM principals WHERE id='service:activity-reader'").fetchone():
+                resources.append({"id":"crm-activity", "name":"CRM security activity", "classification":"internal"})
             return {"schema_version": 1, "company_id": "helio", "complete": True,
                     "app": {"id": "helio-crm", "name": "Helio CRM", "owner_employee_id": "emp-casey-wong"},
-                    "resources": [
-                        {"id": "customer-database", "name": "Customer database", "classification": "confidential"},
-                        {"id": "crm-metadata", "name": "CRM access metadata", "classification": "internal"}],
+                    "resources": resources,
                     "accounts": [dict(r) for r in db.execute("SELECT * FROM principals ORDER BY id")],
                     "grants": self._grants(db)}
         return self._perform(token, "inventory:read", "inventory", snapshot, metadata=True)

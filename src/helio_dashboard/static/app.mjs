@@ -10,6 +10,7 @@ import {
   monitoringRows,
   graphLayout,
 } from "./model.mjs";
+import { renderActivity } from "./activity.mjs";
 
 const paths = {
   shield: "M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z",
@@ -59,6 +60,7 @@ const tabs = [
   ["apps", "Apps"],
   ["policies", "Policies"],
   ["findings", "Findings"],
+  ["activity", "Activity"],
 ];
 let state = null,
   tab = "dashboard",
@@ -74,6 +76,38 @@ let state = null,
   loading = false,
   drawer = null,
   drawerReturn = null;
+let activityData = null, activityHealth = null, activityError = false,
+  activityLoading = false, activityFilter = '', activityActor = '', activityVersion = 0;
+
+async function loadActivity(more = false) {
+  const version = ++activityVersion;
+  activityLoading = true;
+  render();
+  const query = new URLSearchParams({limit:'25'});
+  if (activityFilter) query.set('outcome', activityFilter);
+  if (activityActor) query.set('actor_id', activityActor);
+  if (more && activityData?.next_before) {
+    query.set('before', activityData.next_before);
+    query.set('snapshot', activityData.snapshot);
+  }
+  try {
+    const responses = await Promise.all([fetch('/api/activity?'+query,{cache:'no-store'}),fetch('/api/activity/health',{cache:'no-store'})]);
+    if (responses.some(r => !r.ok)) throw Error('unavailable');
+    const [page, health] = await Promise.all(responses.map(r => r.json()));
+    if (!Array.isArray(page.items) || !Array.isArray(health.sources)) throw Error('invalid');
+    if (version !== activityVersion) return;
+    activityData = more ? {...page,items:[...(activityData?.items ?? []),...page.items]} : page;
+    activityHealth = health;
+    activityError = false;
+  } catch {
+    if (version === activityVersion) activityError = true;
+  } finally {
+    if (version === activityVersion) {
+      activityLoading = false;
+      render();
+    }
+  }
+}
 const main = document.querySelector("#main"),
   nav = document.querySelector("#navigation");
 const num = (value) => (value == null ? "—" : Number(value).toLocaleString());
@@ -391,6 +425,7 @@ function render() {
       apps: appsPage,
       policies: policiesPage,
       findings: findingsPage,
+      activity: () => renderActivity(activityData,activityHealth,{error:activityError,loading:activityLoading,filter:activityFilter,actor:activityActor}),
     }[tab]();
   if (focusId) {
     const target = document.getElementById(focusId);
@@ -425,7 +460,8 @@ async function load() {
     };
   } finally {
     loading = false;
-    render();
+    // Activity has its own polling and must retain expanded evidence and draft filters.
+    if (tab !== 'activity') render();
   }
 }
 async function refresh() {
@@ -662,6 +698,12 @@ document.addEventListener("click", (event) => {
   if (!target) return;
   const { action, id, value, page } = target.dataset;
   switch (action) {
+    case "activity-reload":
+      loadActivity();
+      break;
+    case "activity-more":
+      if (!activityLoading) loadActivity(true);
+      break;
     case "navigate":
       navigate(page);
       break;
@@ -735,6 +777,14 @@ document.addEventListener("input", (event) => {
     render();
   }
 });
+document.addEventListener('submit', event => {
+  if (event.target.id !== 'activity-filter-form') return;
+  event.preventDefault();
+  activityFilter = document.querySelector('#activity-outcome').value;
+  activityActor = document.querySelector('#activity-actor').value.trim();
+  activityData = null;
+  loadActivity();
+});
 document.querySelector("#company-toggle").addEventListener("click", () => {
   const menu = document.querySelector("#company-menu");
   menu.hidden = !menu.hidden;
@@ -796,14 +846,20 @@ window.addEventListener("hashchange", () => {
   tab = tabs.find(([id]) => id === location.hash.slice(1))?.[0] ?? "dashboard";
   closeDrawer();
   render();
+  if (tab === 'activity') loadActivity();
   window.scrollTo({ top: 0, behavior: "instant" });
 });
 tab = tabs.find(([id]) => id === location.hash.slice(1))?.[0] ?? "dashboard";
 render();
 load();
+if (tab === 'activity') loadActivity();
 setInterval(() => {
   if (!document.hidden && !pending) load();
 }, 15000);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) load();
 });
+setInterval(() => {
+  if (!document.hidden && tab === 'activity' && !activityLoading && !document.querySelector('.activity-request[open]') &&
+      !document.activeElement?.closest('#activity-filter-form') && (activityData?.items?.length ?? 0) <= 25) loadActivity();
+}, 5000);

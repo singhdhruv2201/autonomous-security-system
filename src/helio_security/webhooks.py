@@ -12,7 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, Union
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 from starlette.concurrency import run_in_threadpool
@@ -55,7 +56,7 @@ class Envelope(BaseModel):
 
 class Operation(Envelope):
     event_type: Literal['operation.completed']
-    action: Literal['customers:read','customers:write','grants:revoke','accounts:read','grants:read','inventory:read','audit:read','activity:replay']
+    action: Literal['customers:read','customers:write','grants:revoke','accounts:read','grants:read','inventory:read','audit:read','activity:replay','events:read']
     resource_id: Literal['customer-database','crm-metadata','crm-audit']
     record_id: ID | None
     outcome: Literal['allowed','denied','failed']
@@ -69,7 +70,7 @@ class Operation(Envelope):
 
 class HTTPEvent(Envelope):
     method: Literal['GET','HEAD','POST','PATCH','PUT','DELETE','OPTIONS','OTHER']
-    route: Literal['/customers','/customers/{id}','/grants/{id}/revoke','/accounts','/grants','/inventory','/audit','unmatched']
+    route: Literal['/customers','/customers/{id}','/grants/{id}/revoke','/accounts','/grants','/inventory','/audit','/activity/status','/activity/events','unmatched']
 
 
 class Received(HTTPEvent):
@@ -149,19 +150,35 @@ class Inbox:
                     source_instance_id=? AND (event_id=? OR sequence=?)''',
                     tuple(event[k] for k in ('company_id','source','source_instance_id','event_id','sequence'))).fetchone()
                 if row:
+                    if row['payload'] == payload:
+                        self.accepted(db, event, now)
+                    else:
+                        self.conflicted(db, event, now)
                     return 200 if row['payload'] == payload else 409
                 db.execute('''INSERT INTO inbox(company_id,source,source_instance_id,event_id,sequence,payload,received_at)
                     VALUES (?,?,?,?,?,?,?)''', (*[event[k] for k in ('company_id','source','source_instance_id','event_id','sequence')],payload,now))
+                self.accepted(db, event, now)
             return 202
         finally:
             db.close()
 
+    def accepted(self, db, event, now):
+        """Transactional extension point for durable receipt checkpoints."""
 
-def create_app(path=None, keys=None, *, clock=time.time):
-    inbox = Inbox(path or os.getenv('AWASI_INBOX_DB_PATH','data/inbox.sqlite3'))
+    def conflicted(self, db, event, now):
+        """Transactional extension point for evidence integrity failures."""
+
+
+def create_app(path=None, keys=None, *, clock=time.time, read_tokens=None):
+    from .activity_client import activity_query
+    inbox = None
 
     @asynccontextmanager
     async def lifespan(app):
+        nonlocal inbox
+        from .activity_store import ActivityStore
+        inbox = ActivityStore(path or os.getenv('AWASI_INBOX_DB_PATH','data/inbox.sqlite3'))
+        app.state.inbox = inbox
         configured = keys
         if configured is None:
             key_id = os.getenv('CRM_WEBHOOK_KEY_ID', 'crm-1')
@@ -178,11 +195,46 @@ def create_app(path=None, keys=None, *, clock=time.time):
                                  for key,value in configured.items()):
             raise ValueError('Invalid webhook connector configuration')
         app.state.keys = configured
+        readers = read_tokens if read_tokens is not None else {
+            role:os.getenv('SECURITY_'+role.upper()+'_TOKEN','') for role in ('viewer','operator')}
+        if any(readers.values()) and (set(readers) != {'viewer','operator'} or
+                any(not isinstance(v,str) or len(v)<32 for v in readers.values()) or len(set(readers.values()))!=2
+                or any(v==key['secret'] for v in readers.values() for key in configured.values())):
+            raise ValueError('Invalid activity read credentials')
+        app.state.read_tokens = readers
         inbox.initialize()
-        yield
+        from .activity_worker import ActivityWorker
+        worker = ActivityWorker.from_environment(inbox)
+        app.state.worker = worker
+        if worker:
+            worker.start()
+        try:
+            yield
+        finally:
+            if worker:
+                worker.stop()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.inbox = inbox
+
+    bearer = HTTPBearer(auto_error=False)
+
+    def reader(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+        supplied = credentials.credentials.encode() if credentials else b''
+        if any(value and hmac.compare_digest(supplied,value.encode()) for value in app.state.read_tokens.values()):
+            return 'helio'
+        raise HTTPException(401, 'Valid activity read credential required', headers={'WWW-Authenticate':'Bearer'})
+
+    @app.get('/activity')
+    def list_activity(company=Depends(reader), query=Depends(activity_query)):
+        return inbox.activity(company,**query)
+
+    @app.get('/activity/health')
+    def activity_health(company=Depends(reader)):
+        result = inbox.health(company,now=clock())
+        worker = app.state.worker
+        running = bool(worker and worker.thread and worker.thread.is_alive())
+        return {**result,'worker_running':running,'coverage_complete':result['coverage_complete'] and running}
 
     @app.get('/health')
     def health():
