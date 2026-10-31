@@ -10,9 +10,10 @@ builds a Neo4j company graph, and persists security findings. Its authenticated
 API runs on port 8002 with a background observation worker. The Awasi dashboard
 on port 3000 shows company security, the graph, agents, apps, policies, and findings.
 AI investigation, Slack, and automated remediation remain later milestones.
-The CRM also has opt-in durable operation events and a pending outgoing queue
-(phases 0–1). Webhook delivery and HTTP response lifecycle capture are not enabled
-yet. See the [activity contract and coverage](docs/crm-activity-contract.md).
+The CRM also has opt-in request/response activity capture and signed background
+webhook delivery to a durable Awasi inbox (phases 0–4). See
+[activity startup, delivery and replay](docs/activity-delivery.md). Inbox processing,
+gap recovery and activity dashboard visibility remain later phases.
 See [dashboard guide](docs/dashboard.md), [security API and workflow](docs/backend.md) and [graph walkthrough](docs/graph.md).
 
 ## Start with Docker
@@ -27,7 +28,7 @@ Open **http://localhost:3000** for the Awasi dashboard.
 Use **http://localhost:8000/docs** for the directory or
 **http://localhost:8001/docs** for the CRM API explorer, or
 **http://localhost:8002/docs** for the security platform API.
-`make setup` generates four CRM credentials, two security API tokens, and a Neo4j password in a local `.env` file
+`make setup` generates four CRM credentials, two security API tokens, a webhook signing secret, and a Neo4j password in a local `.env` file
 with owner-only permissions. It preserves existing credentials on repeat runs.
 The file is excluded from Git and Docker build contexts; there is no committed
 credential template. Never share it or the output of `docker compose config`

@@ -1,4 +1,4 @@
-"""Opt-in operation evidence at existing HTTP and CLI boundaries; no phase-2 hooks."""
+"""Opt-in operation evidence at existing HTTP and CLI boundaries; with correlated HTTP lifecycle evidence."""
 
 import json
 import secrets
@@ -13,6 +13,10 @@ from helio_crm.api import create_app
 from helio_crm.store import CRMStore
 from test_crm_activity import events, pending
 from test_graph import serve
+
+
+def operations(store):
+    return [e for e in events(store) if e["event_type"] == "operation.completed"]
 
 
 @pytest.fixture
@@ -31,9 +35,9 @@ def test_factory_enables_capture_without_new_routes(setup):
                             json={"expected_version": 1, "notes": "denied"}).status_code == 403
         assert client.get("/security-events", headers=headers).status_code == 404
     store = CRMStore(path)
-    assert [e["status_code"] for e in events(store)] == [200, 401, 403]
-    assert all(e["event_type"] == "operation.completed" for e in events(store))
-    assert len(pending(store)) == 3
+    assert [e["status_code"] for e in operations(store)] == [200, 401, 403]
+    assert all(e["event_type"] == "operation.completed" for e in operations(store))
+    assert len(pending(store)) == 15
 
 
 @pytest.mark.parametrize("value, expected", [(None, False), ("0", False), ("1", True)])
@@ -44,7 +48,7 @@ def test_environment_capture_is_explicit_opt_in(setup, monkeypatch, value, expec
         monkeypatch.setenv("CRM_ACTIVITY_ENABLED", value)
     with TestClient(create_app(path, tokens, directory.employees)) as client:
         assert client.get("/customers", headers={"Authorization": "Bearer " + tokens["agent"]}).status_code == 200
-    assert len(events(CRMStore(path))) == int(expected)
+    assert len(events(CRMStore(path))) == 4 * int(expected)
 
 
 @pytest.mark.parametrize("value", ["false", "true", "", "2"])
@@ -95,14 +99,14 @@ def test_unexpected_application_error_has_safe_http_500_and_failure_event(setup,
         response = client.get("/customers/cust-northstar", headers={"Authorization": "Bearer " + tokens["agent"]})
         assert response.status_code == 500 and response.json() == {"detail": "Operation failed"}
     store = CRMStore(path)
-    [event] = events(store)
+    [event] = operations(store)
     assert event["reason_code"] == "operation_failed" and event["outcome"] == "failed"
     assert tokens["admin"] not in json.dumps(event)
     with store.connection() as db:
         assert db.execute("SELECT notes FROM customers WHERE id='cust-northstar'").fetchone()[0] == ""
 
 
-def test_framework_rejections_and_public_routes_do_not_invent_phase_two_events(setup):
+def test_framework_rejections_and_public_routes_record_only_http_stages(setup):
     directory, path, tokens = setup
     with TestClient(create_app(path, tokens, directory.employees, activity_enabled=True)) as client:
         for route in ("/", "/health", "/docs", "/openapi.json"):
@@ -113,8 +117,9 @@ def test_framework_rejections_and_public_routes_do_not_invent_phase_two_events(s
                             headers={"Authorization": "Bearer " + tokens["maya"]},
                             json={"notes": "invalid without version"}).status_code == 422
     store = CRMStore(path)
-    assert events(store) == [] and pending(store) == []
-    assert events(store, "operational_events") == []
+    assert len(events(store)) == len(pending(store)) == 9
+    assert len(events(store, "operational_events")) == 15
+    assert operations(store) == []
 
 
 def test_real_http_cli_and_agent_operations_are_durable(setup, monkeypatch, capsys):
@@ -139,12 +144,12 @@ def test_real_http_cli_and_agent_operations_are_durable(setup, monkeypatch, caps
             run(url, tokens["agent"])
         assert caught.value.code == 403
     store = CRMStore(path)
-    recorded = events(store)
+    recorded = operations(store)
     assert [e["action"] for e in recorded] == ["customers:read", "customers:read", "customers:write",
                                                "grants:revoke", "customers:read"]
     assert recorded[-1]["outcome"] == "denied"
-    assert len(pending(store)) == 5
+    assert len(pending(store)) == 20
     with serve(create_app(path, tokens, lambda: pytest.fail("Must not rebootstrap"), activity_enabled=True)) as url:
         with pytest.raises(urllib.error.HTTPError):
             run(url, tokens["agent"])
-    assert events(store)[:5] == recorded and len(pending(store)) == 6
+    assert operations(store)[:5] == recorded and len(pending(store)) == 24

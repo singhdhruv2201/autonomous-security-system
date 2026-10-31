@@ -51,10 +51,20 @@ def create_app(db_path=None, tokens=None, employees_loader=None, *, activity_ena
         credentials = tokens if tokens is not None else from_environment()
         employees = [] if store.is_initialized() else (employees_loader or load_directory)()
         store.initialize(employees, credentials)
-        yield
+        from .webhook_worker import DeliveryWorker
+        worker = DeliveryWorker.from_environment(store)
+        if worker:
+            worker.start()
+        try:
+            yield
+        finally:
+            if worker:
+                worker.stop()
 
     app = FastAPI(title="Helio CRM", version="0.2.0", lifespan=lifespan,
                   description="Working local CRM with synthetic customers and enforced bearer-token grants.")
+    from .lifecycle import ActivityMiddleware
+    app.add_middleware(ActivityMiddleware, store=store)
 
     @app.exception_handler(CRMError)
     async def handle_error(request: Request, error: CRMError):
@@ -106,6 +116,12 @@ def create_app(db_path=None, tokens=None, employees_loader=None, *, activity_ena
     @app.get("/audit", tags=["Administration"])
     def audit(credentials: Credentials, limit: int = Query(default=100, ge=1, le=500)):
         return store.audit(token(credentials), limit)
+
+    @app.post('/activity-deliveries/{sequence}/replay', tags=['Administration'])
+    def replay(sequence: Annotated[int, Field(ge=1, le=2**63-1)], body: dict, credentials: Credentials):
+        if body or sequence < 1:
+            raise CRMError(422, 'Invalid replay request')
+        return store.replay_delivery(token(credentials), sequence)
 
     return app
 

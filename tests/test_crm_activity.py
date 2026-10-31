@@ -28,7 +28,7 @@ def events(store, table="activity_events"):
 
 def pending(store):
     with store.connection() as db:
-        return [dict(row) for row in db.execute("SELECT * FROM activity_outbox ORDER BY event_sequence")]
+        return [dict(row) for row in db.execute("SELECT event_sequence,status FROM activity_outbox ORDER BY event_sequence")]
 
 
 def test_default_off_still_migrates_but_keeps_legacy_audit(directory, tmp_path):
@@ -41,7 +41,7 @@ def test_default_off_still_migrates_but_keeps_legacy_audit(directory, tmp_path):
     assert events(store, "operational_events") == []
     with store.connection() as db:
         assert db.execute("SELECT COUNT(*) FROM audit").fetchone()[0] == 1
-        assert db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0] == "3"
+        assert db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0] == "4"
 
 
 def test_read_produces_one_redacted_event_and_pending_delivery(activity_crm):

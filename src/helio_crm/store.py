@@ -69,7 +69,7 @@ class CRMStore:
             with self.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
                 version = db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0]
-                if version not in {"1", "2", "3"}:
+                if version not in {"1", "2", "3", "4"}:
                     raise ValueError("Unsupported CRM schema version")
                 existing = {r["principal_id"]: r["token_hash"] for r in db.execute("SELECT * FROM credentials")}
                 expected = {principals[k]: token_hash(v) for k, v in tokens.items()}
@@ -82,10 +82,13 @@ class CRMStore:
                     db.execute("UPDATE metadata SET value='2' WHERE key='schema_version'")
                 if "observer" in tokens and "service:security-observer" not in existing:
                     self._add_observer(db, tokens["observer"])
-                if version != "3":
+                if version in {"1", "2"}:
                     activity.initialize(db)
                     db.execute("UPDATE metadata SET value='3' WHERE key='schema_version'")
-                activity.validate_schema(db)
+                activity.validate_schema(db, delivery=version == '4')
+                if version != '4':
+                    activity.migrate_outbox(db)
+                    db.execute("UPDATE metadata SET value='4' WHERE key='schema_version'")
             return
         ids = {e["id"] for e in employees}
         if "emp-maya-chen" not in ids:
@@ -148,7 +151,8 @@ class CRMStore:
             if "observer" in tokens:
                 self._add_observer(db, tokens["observer"])
             activity.initialize(db)
-            db.execute("INSERT INTO metadata VALUES ('schema_version', '3')")
+            activity.migrate_outbox(db)
+            db.execute("INSERT INTO metadata VALUES ('schema_version', '4')")
 
     @staticmethod
     def _add_observer(db, token):
@@ -206,6 +210,9 @@ class CRMStore:
             status = error.status_code if error else 200
             outcome = "allowed" if not error else ("denied" if status in (401, 403) else "failed")
             occurred_at, request_id = datetime.now(timezone.utc).isoformat(), str(uuid.uuid4())
+            from .lifecycle import context
+            if context.get() is not None:
+                request_id = context.get()['request_id']
             # Unknown path identifiers may themselves contain secrets or log injection.
             safe_resource = before["id"] if before else action.split(":", 1)[0]
             db.execute("""INSERT INTO audit (occurred_at, request_id, actor_id, action,
@@ -294,3 +301,17 @@ class CRMStore:
         return self._perform(token, "audit:read", "audit",
                              lambda db: [dict(r) for r in db.execute(
                                  "SELECT * FROM audit ORDER BY id DESC LIMIT ?", (limit,))], admin=True)
+
+    def replay_delivery(self, token, sequence):
+        def replay(db):
+            row = db.execute('SELECT status FROM activity_outbox WHERE event_sequence=?',(sequence,)).fetchone()
+            if row is None: raise CRMError(404, 'Delivery not found')
+            if row['status'] != 'dead_letter': raise CRMError(409, 'Delivery is not replayable')
+            db.execute("""UPDATE activity_outbox SET status='pending',attempts=0,next_attempt_at=0,
+                lease_id=NULL,lease_until=NULL,last_error=NULL WHERE event_sequence=?""",(sequence,))
+            actor = db.execute('SELECT principal_id FROM credentials WHERE token_hash=?',(token_hash(token),)).fetchone()[0]
+            db.execute("""INSERT INTO delivery_audit(event_sequence,occurred_at,status_code,outcome,actor_id)
+                VALUES (?,?,200,'replayed',?)""",(sequence,datetime.now(timezone.utc).timestamp(),actor))
+            db.execute('DELETE FROM delivery_audit WHERE id NOT IN (SELECT id FROM delivery_audit ORDER BY id DESC LIMIT 1000)')
+            return {'event_sequence':sequence,'status':'pending'}
+        return self._perform(token,'activity:replay','activity',replay,admin=True)

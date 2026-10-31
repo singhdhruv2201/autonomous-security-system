@@ -1,7 +1,8 @@
 # Awasi autonomous security architecture and implementation plan
 
-Status: architecture proposed for review, 2026-10-30. Phases 0–1 now have an opt-in
-operation-activity implementation; see the [implemented contract](crm-activity-contract.md).
+Status: architecture proposed for review, 2026-10-30. Phases 0–4 now have opt-in
+operation/request/response capture and signed background delivery to a durable inbox;
+see the [implemented delivery guide](activity-delivery.md).
 The remaining architecture describes future behavior, not currently active features.
 Revision: prioritize complete CRM activity capture and authorized webhook delivery
 to Awasi before adding policies; retain request and response enforcement in the target design.
@@ -45,13 +46,13 @@ near-real-time notification, not synchronous authorization or guaranteed instant
 | Area | Current behavior | Implication |
 | --- | --- | --- |
 | CRM enforcement | `CRMStore._perform` authenticates and checks access in the transaction that performs the operation | A useful place to add enforcement without a new network hop |
-| CRM operations | Customer list/get/update, account/grant/inventory reads, grant revocation, audit reads | No activity webhook delivery or business export/email/webhook, login, OAuth-consent, billing, role-change, or MCP execution endpoints yet |
+| CRM operations | Customer list/get/update, account/grant/inventory reads, grant revocation, audit reads, admin delivery replay | Business export/email/webhook, login, OAuth-consent, billing, role-change and MCP remain future integrations |
 | Data model | Six synthetic customers; permissions apply to the resource as a whole | Team/row/field authorization requires additional authoritative metadata |
 | Scope checks | Active grant scopes are combined by principal; the authorization query does not filter grants by resource | Bind scope to canonical resource and application before introducing more resources |
 | Administration | Administrative access uses the principal role | Introduce an explicit principal/credential disable mechanism; revoking an ordinary grant does not disable role-based administration |
 | Graph and posture | Directory/CRM snapshots every 60 seconds; one inactive-owner-agent rule | Keep posture evaluation; add an independent activity pipeline |
-| CRM audit | Local ordered audit IDs, newest-first API capped at 500; observer cannot read audit | Extend the existing audit foundation; add a transactional outbox, signed webhook delivery, and authorized cursor recovery feed |
-| Audit coverage | Successful operations and store-level denials/errors; no response counts or payload content; framework validation errors are missing | Extend telemetry at both the API and transaction boundaries |
+| CRM audit | Legacy audit plus opt-in transactional activity/outbox and signed delivery to a separate inbox | Authorized cursor recovery and processing remain phase 5 |
+| Audit coverage | Request/operation/response metadata, counts/bytes, framework failures and observable interruptions; bodies excluded | Scanners remain not_run; missing completion is unknown |
 | Findings | Identity, title, severity, evidence freshness, and reconciliation assume one rule | Generalize persistence and rendering before adding rule families |
 | Workers | One observation worker/process; one active run per company | AI, ingestion, and remediation require separate job types and scheduling |
 | Agent | Deterministic read-only Python client | LLM, MCP, and prompt scanning are future integration surfaces |
@@ -608,7 +609,7 @@ automatic remediation phases. The policy implementation includes enforcement hoo
 persistence, and dashboard capability reporting; adding boolean functions alone
 would not enforce the policies.
 
-Phases 0–1 are implemented and verified; the next selectable phase is 2. The detailed roadmap splits CRM
+Phases 0–4 are implemented; the next selectable phase is 5. The detailed roadmap splits CRM
 capture, HTTP response instrumentation, receiver, sender, recovery and visibility
 into separate acceptance boundaries. Later permissions, offboarding, credential
 lifecycle, budgets, failure detection and scanning are also separate phases. Do not

@@ -22,6 +22,11 @@ services:
     environment:
       CRM_DB_PATH: /data/crm.sqlite3
       CRM_ACTIVITY_ENABLED: ${CRM_ACTIVITY_ENABLED:-0}
+      CRM_WEBHOOK_ENABLED: ${CRM_WEBHOOK_ENABLED:-0}
+      CRM_WEBHOOK_URL: http://awasi-ingest:8003/webhooks/crm/activity
+      CRM_WEBHOOK_ALLOW_LOCAL: "1"
+      CRM_WEBHOOK_KEY_ID: ${CRM_WEBHOOK_KEY_ID:-crm-1}
+      CRM_WEBHOOK_SECRET: ${CRM_WEBHOOK_SECRET:-}
       HELIO_DIRECTORY_URL: http://simulator:8000
       CRM_ADMIN_TOKEN: ${CRM_ADMIN_TOKEN:?Run make setup first}
       CRM_MAYA_TOKEN: ${CRM_MAYA_TOKEN:?Run make setup first}
@@ -36,6 +41,29 @@ services:
       - crm-data:/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+  awasi-ingest:
+    build: .
+    image: helio-simulator:local
+    profiles: ["activity"]
+    networks: [customer]
+    command: ["uvicorn", "helio_security.webhooks:app", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      AWASI_INBOX_DB_PATH: /data/inbox.sqlite3
+      CRM_WEBHOOK_KEY_ID: ${CRM_WEBHOOK_KEY_ID:-crm-1}
+      CRM_WEBHOOK_SECRET: ${CRM_WEBHOOK_SECRET:-}
+      CRM_WEBHOOK_PREVIOUS_KEY_ID: ${CRM_WEBHOOK_PREVIOUS_KEY_ID:-crm-previous}
+      CRM_WEBHOOK_PREVIOUS_SECRET: ${CRM_WEBHOOK_PREVIOUS_SECRET:-}
+    ports:
+      - "127.0.0.1:8003:8003"
+    volumes:
+      - activity-inbox:/data
+    read_only: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -146,6 +174,7 @@ volumes:
   crm-data:
   security-graph-data:
   security-state:
+  activity-inbox:
 networks:
   customer:
   platform:

@@ -74,7 +74,7 @@ def test_real_legacy_migration_preserves_data_and_never_backfills_events(legacy_
     with store.connection() as db:
         instance = db.execute("SELECT value FROM metadata WHERE key='activity_source_instance_id'").fetchone()[0]
         assert uuid.UUID(instance)
-        assert db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0] == "3"
+        assert db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0] == "4"
         row = db.execute("SELECT status,version,resource_id FROM grants WHERE id='grant-sales-agent'").fetchone()
         assert tuple(row) == ("revoked", 9, "customer-database")
     store.initialize([], tokens)

@@ -1,5 +1,9 @@
 # CRM activity contract — phases 0 and 1
 
+Historical phase-0/1 contract and verification record. Phases 2–4 now extend this
+with HTTP lifecycle evidence, schema v4, a signed receiver and background sender;
+see [the current delivery guide](activity-delivery.md) for runtime behavior.
+
 Contract version: 1. Scope: the owned, single-company Helio CRM. Phase 1 emits
 operation events only; HTTP lifecycle capture, webhook transport, policy decisions,
 and automatic remediation belong to later phases.

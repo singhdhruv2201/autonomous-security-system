@@ -107,13 +107,14 @@ are recorded after collecting their result, so their own record appears on the
 next read. The audit table is a local append-only application convention, not
 tamper-proof storage.
 
-## Durable operation activity (phases 0–1)
+## Durable activity and delivery (phases 0–4)
 
-Schema v3 adds `activity_events`, `activity_outbox`, and `operational_events`.
-Existing v1/v2 databases migrate in one transaction while preserving customer
+Schema v4 includes `activity_events`, `activity_outbox`, `operational_events` and
+`delivery_audit`, extending v3 with durable delivery state and leases.
+Existing v1/v2/v3 databases migrate in one transaction while preserving customer
 records, credential hashes, revoked grants, and legacy audits. The source-instance
 UUID survives restart; incomplete/corrupt activity schemas fail startup. Older
-binaries do not support schema v3. Back up the database before deploying a new
+binaries do not support schema v4. Back up the database before deploying a new
 build; rollback requires a compatible build or restoring that backup, not resetting
 schema metadata by hand.
 
@@ -132,9 +133,10 @@ No deployment or capture setting is changed merely by editing the source.
 Each protected store operation emits metadata about its outcome. Customer operations,
 grant revocations, and denials/failures enter the security stream with a pending
 outbox entry; successful metadata/audit reads enter only the operational stream.
-Both streams correlate with legacy audit request IDs. Operation IDs are not yet
-correlated with the full HTTP lifecycle. See the exact
-[activity contract and coverage matrix](crm-activity-contract.md).
+Both streams correlate with legacy audit request IDs and the HTTP lifecycle.
+HTTP requests also record received, prepared response and completion metadata.
+See the [current capture and delivery guide](activity-delivery.md) and historical
+[phase-0/1 activity contract](crm-activity-contract.md).
 
 Business changes, legacy audit, activity event and pending delivery commit together.
 Rejected partial writes roll back before the denial is recorded. An unusable
@@ -144,21 +146,25 @@ is still usable. Unknown requested IDs and exception text are sanitized; payload
 never include customer bodies, notes, bearer tokens or token hashes.
 
 The controlled-demo limit is 10,000 retained events per stream. A full required
-stream returns 503 without committing new business changes. There is no sender,
-cleanup job or automatic pruning yet; leave capture off for unattended use. To stop
-capture, recreate CRM with `CRM_ACTIVITY_ENABLED=0`; existing events and pending
+operation stream prevents the business commit; a later response-audit failure
+returns 503 but preserves any already committed operation. A background sender is
+available, but there is no cleanup job or automatic pruning yet; leave capture off
+for unattended use. To stop capture, recreate CRM with both `CRM_ACTIVITY_ENABLED=0`
+and `CRM_WEBHOOK_ENABLED=0`; existing events and pending
 deliveries remain. This does not change grants or disable the original audit log.
 The database is application-append-only, not tamper-proof.
 
-There are no new event-reader/webhook endpoints or response scanners in this phase.
-Framework-rejected requests, public routes, emitted bytes and response interruptions
-remain phase-2 work. Actual request/response evidence will distinguish completed
-database operations from successful transmission to a caller.
+Framework-rejected requests, public routes, response sizes and observable interruptions
+are covered. Response checks report `not_run` until scanners exist. Optional signed
+webhooks persist events in a separate Awasi inbox; replay is admin-only. Recovery
+readers, inbox processing and the activity UI remain later phases. See the delivery
+guide for enablement, rotation, outage handling and the exact limits of completion
+evidence.
 
 Focused checks:
 
 ```sh
-.venv/bin/python -m pytest -q tests/test_crm_activity.py tests/test_crm_activity_api.py tests/test_crm_activity_migrations.py
+.venv/bin/python -m pytest -q tests/test_crm_activity.py tests/test_crm_activity_api.py tests/test_crm_activity_migrations.py tests/test_crm_lifecycle.py tests/test_webhooks.py tests/test_webhook_worker.py
 ```
 
 ## Repeat the scenario

@@ -1,8 +1,9 @@
 # Awasi implementation phases
 
-Status: phases 0–1 implemented and verified, 2026-10-30; later
-phases remain proposed. Phase 0–1's [activity contract](crm-activity-contract.md)
-records the implemented scope. This is the authoritative execution breakdown for the
+Status: phases 0–4 implemented; phases 5 onward remain proposed. Phase 0–1's
+[activity contract](crm-activity-contract.md) and the
+[phase 2–4 delivery guide](activity-delivery.md) record implemented scope and checks.
+This is the authoritative execution breakdown for the
 [architecture plan](autonomous-security-plan.md); it replaces that plan's earlier
 0/1a/1b/1c phase numbering.
 
@@ -419,9 +420,10 @@ redaction, retry safety or atomicity until production.
 
 ## Suggested first selection
 
-Phases **0 and 1 are complete**; their verification results are recorded in the
-[activity contract](crm-activity-contract.md). The next selectable work is **phase 2**,
-HTTP request/response instrumentation. Continue through phase 6 one bounded phase
+Phases **0–4 are complete**; implementation details are recorded in the
+[activity contract](crm-activity-contract.md) and [delivery guide](activity-delivery.md).
+The next selectable work is **phase 5**, gap recovery and resumable processing.
+Continue through phase 6 one bounded phase
 at a time. At that point, review real activity and delivery measurements before
 choosing the first additional policy. This status does not authorize later phases.
 

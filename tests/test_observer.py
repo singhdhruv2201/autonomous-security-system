@@ -71,6 +71,9 @@ def test_legacy_crm_upgrade_preserves_data_tokens_and_revocation(directory, tmp_
         if "resource_id" in columns:
             db.execute("ALTER TABLE grants DROP COLUMN resource_id")
         db.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
+        for table in ('activity_outbox', 'activity_events', 'operational_events', 'delivery_audit'):
+            db.execute(f'DROP TABLE IF EXISTS {table}')
+        db.execute("DELETE FROM metadata WHERE key='activity_source_instance_id'")
         original_hashes = dict(db.execute("SELECT principal_id, token_hash FROM credentials"))
     tokens["observer"] = secrets.token_urlsafe(32)
     store.initialize([], tokens)

@@ -14,13 +14,13 @@ def setup(path):
     if "NEO4J_PASSWORD" in entries and len(entries["NEO4J_PASSWORD"]) < 8:
         raise ValueError("Existing Neo4j password is invalid; review .env locally")
     additions = {}
-    for name in ("NEO4J_PASSWORD", "SECURITY_OPERATOR_TOKEN", "SECURITY_VIEWER_TOKEN"):
+    for name in ("NEO4J_PASSWORD", "SECURITY_OPERATOR_TOKEN", "SECURITY_VIEWER_TOKEN", "CRM_WEBHOOK_SECRET"):
         if name not in entries:
             additions[name] = secrets.token_urlsafe(32)
         elif name != "NEO4J_PASSWORD" and len(entries[name]) < 32:
             raise ValueError("Existing security API token is invalid; review .env locally")
     credentials = [value for key, value in {**entries, **additions}.items()
-                   if key.endswith("_TOKEN") or key == "NEO4J_PASSWORD"]
+                   if key.endswith(("_TOKEN", "_SECRET")) or key == "NEO4J_PASSWORD"]
     if len(set(credentials)) != len(credentials):
         raise ValueError("Service credentials must be distinct; review .env locally")
     if additions:
