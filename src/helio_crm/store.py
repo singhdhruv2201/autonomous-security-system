@@ -73,7 +73,8 @@ class CRMStore:
         validate_credentials(tokens)
         principals = {"admin": "service:crm-admin", "maya": "employee:emp-maya-chen",
                       "agent": "agent:sales-research", "observer": "service:security-observer",
-                      "recovery": "service:activity-reader", "publisher": "service:identity-publisher"}
+                      "recovery": "service:activity-reader", "publisher": "service:identity-publisher",
+                      "actions": "service:awasi-actions"}
         if self.is_initialized():
             with self.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -83,7 +84,7 @@ class CRMStore:
                 existing = {r["principal_id"]: r["token_hash"] for r in db.execute("SELECT * FROM credentials")}
                 expected = {principals[k]: token_hash(v) for k, v in tokens.items()}
                 if any(expected.get(k) != v for k, v in existing.items()) or any(
-                    k not in existing for k in expected if k not in {"service:security-observer", "service:activity-reader", "service:identity-publisher"}
+                    k not in existing for k in expected if k not in {"service:security-observer", "service:activity-reader", "service:identity-publisher", "service:awasi-actions"}
                 ):
                     raise ValueError("Configured credentials do not match stored credentials; restore the original .env")
                 if version == "1":
@@ -103,6 +104,8 @@ class CRMStore:
                 policies.initialize(db)
                 if "publisher" in tokens and "service:identity-publisher" not in existing:
                     self._add_publisher(db, tokens["publisher"])
+                if "actions" in tokens and "service:awasi-actions" not in existing:
+                    self._add_actions(db, tokens["actions"])
             return
         ids = {e["id"] for e in employees}
         if "emp-maya-chen" not in ids:
@@ -145,7 +148,7 @@ class CRMStore:
             db.execute("INSERT INTO principals VALUES ('agent:sales-research', 'Sales Research Agent', 'agent', 'emp-maya-chen', 'user')")
             db.execute("INSERT INTO principals VALUES ('service:crm-admin', 'CRM Administration', 'service', 'emp-casey-wong', 'admin')")
             db.executemany("INSERT INTO credentials VALUES (?, ?)",
-                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key not in {"observer", "recovery", "publisher"}])
+                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key not in {"observer", "recovery", "publisher", "actions"}])
             db.executemany("INSERT INTO grants (id,principal_id,scopes,status,version) VALUES (?, ?, ?, 'active', 1)", [
                 ("grant-sales-agent", "agent:sales-research", json.dumps(["customers:read"])),
                 ("grant-maya", "employee:emp-maya-chen", json.dumps(["customers:read", "customers:write"])),
@@ -166,6 +169,8 @@ class CRMStore:
                 self._add_observer(db, tokens["observer"])
             if "recovery" in tokens:
                 self._add_recovery_reader(db, tokens["recovery"])
+            if "actions" in tokens:
+                self._add_actions(db, tokens["actions"])
             activity.initialize(db)
             activity.migrate_outbox(db)
             db.execute("INSERT INTO metadata VALUES ('schema_version', '4')")
@@ -193,6 +198,14 @@ class CRMStore:
         db.execute("""INSERT INTO grants (id,principal_id,scopes,status,version,resource_id) VALUES ('grant-security-observer', 'service:security-observer',
                    ?, 'active', 1, 'crm-metadata')""",
                    (json.dumps(["accounts:read", "grants:read", "inventory:read"]),))
+
+    @staticmethod
+    def _add_actions(db, token):
+        db.execute("INSERT INTO principals VALUES ('service:awasi-actions', 'Awasi Actions', 'service', 'emp-casey-wong', 'user')")
+        db.execute("INSERT INTO credentials VALUES (?, 'service:awasi-actions')", (token_hash(token),))
+        db.execute("""INSERT INTO grants (id,principal_id,scopes,status,version,resource_id)
+                   VALUES ('grant-awasi-actions', 'service:awasi-actions', ?, 'active', 1, 'crm-metadata')""",
+                   (json.dumps(["accounts:read", "grants:read", "access:change", "grants:revoke"]),))
 
     @contextmanager
     def _operation_connection(self):
@@ -243,7 +256,16 @@ class CRMStore:
                     decisions.append(policies.decision('credential_lifecycle','deny','credential_invalid'))
                     raise CRMError(401,'Credential revoked or expired')
                 if admin:
-                    if principal["role"] != "admin":
+                    # Allow either the built-in admin role or an active grant covering the action scope.
+                    has_grant = any(
+                        action in json.loads(row["scopes"])
+                        for row in db.execute(
+                            "SELECT scopes FROM grants WHERE principal_id=? AND status='active' "
+                            "AND resource_id=? AND app_id='helio-crm'",
+                            (actor, canonical_resource),
+                        )
+                    )
+                    if principal["role"] != "admin" and not has_grant:
                         raise CRMError(403, "Administrator credential required")
                 elif not (metadata and principal["role"] == "admin"):
                     scopes = {scope for row in db.execute(
@@ -440,8 +462,9 @@ class CRMStore:
 
     def inventory(self, token):
         def snapshot(db):
+            record_count = db.execute("SELECT count(*) FROM customers").fetchone()[0]
             resources = [
-                {"id": "customer-database", "name": "Customer database", "classification": "confidential"},
+                {"id": "customer-database", "name": "Customer database", "classification": "confidential", "record_count": record_count},
                 {"id": "crm-metadata", "name": "CRM access metadata", "classification": "internal"}]
             if db.execute("SELECT 1 FROM principals WHERE id='service:activity-reader'").fetchone():
                 resources.append({"id":"crm-activity", "name":"CRM security activity", "classification":"internal"})

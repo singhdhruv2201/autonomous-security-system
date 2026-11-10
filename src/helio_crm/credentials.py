@@ -5,7 +5,8 @@ import secrets
 from pathlib import Path
 
 ENV_KEYS = {"admin": "CRM_ADMIN_TOKEN", "maya": "CRM_MAYA_TOKEN", "agent": "CRM_AGENT_TOKEN",
-            "observer": "CRM_OBSERVER_TOKEN", "recovery": "CRM_RECOVERY_TOKEN", "publisher": "CRM_IDENTITY_PUBLISHER_TOKEN"}
+            "observer": "CRM_OBSERVER_TOKEN", "recovery": "CRM_RECOVERY_TOKEN",
+            "publisher": "CRM_IDENTITY_PUBLISHER_TOKEN", "actions": "CRM_ACTION_TOKEN"}
 
 
 def validate_credentials(tokens):
@@ -36,7 +37,7 @@ def generate_credentials(path: Path):
         except (ValueError, KeyError) as error:
             raise ValueError("Refusing to overwrite existing environment file; review it locally") from error
         path.chmod(0o600)
-        for name in ("CRM_OBSERVER_TOKEN", "CRM_RECOVERY_TOKEN", "CRM_IDENTITY_PUBLISHER_TOKEN"):
+        for name in ("CRM_OBSERVER_TOKEN", "CRM_RECOVERY_TOKEN", "CRM_IDENTITY_PUBLISHER_TOKEN", "CRM_ACTION_TOKEN"):
             if name not in entries:
                 separator = "" if path.read_text().endswith("\n") else "\n"
                 with path.open("a") as output:

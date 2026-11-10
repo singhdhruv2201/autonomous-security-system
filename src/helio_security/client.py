@@ -9,7 +9,7 @@ import urllib.request
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["overview", "findings", "connectors", "runs", "sync", "audit"])
+    parser.add_argument("command", choices=["overview", "findings", "connectors", "runs", "sync", "audit", "cases"])
     command = parser.parse_args().command
     path = "/sync-runs" if command in {"runs", "sync"} else "/" + command
     variable = "SECURITY_OPERATOR_TOKEN" if command in {"sync", "audit"} else "SECURITY_VIEWER_TOKEN"

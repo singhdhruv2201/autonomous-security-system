@@ -478,7 +478,7 @@ A2A, real providers such as Google Workspace, SSO and named operator accounts, m
 Update after each phase with date, commit, and the test commands and counts actually run.
 
 - Phase 0, cut and reset: **complete — 2026-11-10**. Included in the `Complete Awasi v1 Phase 0 cleanup` commit, based on `f816639`; see Git history for its hash.
-- Phase 1, case loop on the orphaned agent: not started
+- Phase 1, case loop on the orphaned agent: **complete — 2026-11-10**. See verification section below.
 - Phase 2, Slack: not started
 - Phase 3, model, MCP and tracing: not started
 - Phase 4, workbench and outside: not started
@@ -522,3 +522,63 @@ Update after each phase with date, commit, and the test commands and counts actu
   field. These keep Phase 0's removal consistent for upgrades and the UI.
 - No required Phase 0 check remains unrun. Slack, model and case workflow checks are
   later-phase work and were not run.
+
+### Phase 1 verification — 2026-11-10
+
+- Baseline from Phase 0: `.venv/bin/python -m pytest -q` — **452 passed, 17 skipped**;
+  `make test-ui` — **20 passed**.
+- Implementation:
+  - `src/helio_security/decision.py`: pure decision function `decide(facts, confidence)`
+    implementing the 6 decision rules, low-confidence downgrade to `ask_lead`, and
+    the `human_override` invariant.
+  - `src/helio_security/cases.py`: SQLite `CaseStore` implementing `cases`,
+    `case_events`, `case_actions`, `case_decisions`, with partial indexes, foreign
+    key constraints, event idempotency keys, and action deduplication.
+  - `src/helio_crm/credentials.py` & `src/helio_crm/store.py`: `CRM_ACTION_TOKEN`
+    with `service:awasi-actions` grant for principal status management and grant revocation,
+    without customer data read permissions.
+  - `src/helio_security/playbooks.py`: `PausePrincipalPlaybook` (`crm.pause_principal`)
+    and `RevokeGrantPlaybook` (`crm.revoke_grant`) with agent target validation,
+    access version checks, before-state captures, and retry reconciliation.
+  - `src/helio_security/workflow.py`: LangGraph StateGraph (`gather`, `investigate`,
+    `decide`, `execute`, `verify`, `notify_human`, `wait_human`, `process_human_decision`,
+    `report`), synchronous-to-asynchronous bridge for `SqliteSaver`, and finding verification / sync run polling.
+  - `src/helio_security/agent_worker.py`: asyncio daemon process with exclusive file
+    lock (`.agent.lock`), 2s case loop, heartbeat writing, and pending decision resume.
+  - `src/helio_security/api.py`: `GET /cases`, `GET /cases/{id}`, `POST /cases/{id}/decisions`,
+    and `/overview` reporting `agentic: true` and `remediation_enabled: true` from heartbeat.
+  - `src/helio_security/client.py`: added `cases` CLI command; updated `Makefile` with `security-cases`.
+  - `compose.yaml`: added `CRM_ACTION_TOKEN` and `awasi-agent` service on `customer` and
+    `platform` networks mounting `security-state`.
+  - Dependencies: locked development and runtime dependencies for `langchain`,
+    `langgraph-checkpoint-sqlite`, `slack-bolt`, `aiohttp`.
+- Test counts:
+  - Unit tests: `.venv/bin/python -m pytest -q` — **514 passed, 17 skipped** (62 new unit tests
+    across `test_decision.py`, `test_cases.py`, `test_crm_action_token.py`,
+    `test_playbooks_crm.py`, `test_workflow.py`, `test_agent_worker.py`, `test_platform_api.py`).
+  - Integration tests: `make test-integration` — **529 passed, 0 skipped** (all 17 Neo4j
+    integration tests passing).
+  - Frontend UI tests: `make test-ui` — **20 passed**.
+  - Compose configuration: `docker compose config --quiet` passed cleanly.
+- Live acceptance verification measurements:
+  - Reset Docker volumes and started stack: `docker compose down -v && make up`.
+    All 7 services became healthy. `make security-overview` reported `agentic: true`
+    and `remediation_enabled: true`.
+  - Prior to offboarding, `make agent` ran and successfully read 6 customers.
+  - Executed `make offboard` (`emp-maya-chen inactive`).
+  - Within **3.8 seconds** (well within the ~45 second acceptance criterion):
+    - `awasi-agent` observed the open finding, created case `5340aefe-...`, executed
+      `crm.pause_principal` setting `principal_status: disabled`, verified CRM state,
+      enqueued a sync run, and paused at `wait_human` waiting for team lead `emp-hannah-reed`.
+    - `make agent` exited with code 2 (HTTP 403, principal disabled).
+    - `make security-findings` reported the finding resolved with reason `agent_paused`.
+    - `make security-cases` and `GET /cases/{id}` showed a readable timeline of all
+      events and executed actions.
+  - Posted decision `{"key": "lead_decision", "choice": "retire"}` via
+    `POST /cases/{id}/decisions`.
+  - `awasi-agent` resumed the case on its next 2-second tick, recorded
+    `human_decision:retire`, and closed the case as `resolved`.
+- Boundary and security invariants verified:
+  - Customer code (`helio_crm`, `helio_simulator`) never imports Awasi code (`helio_security`).
+  - `CRM_ACTION_TOKEN` cannot read customer records (verified in `tests/test_crm_action_token.py`).
+  - Redaction: timeline events and action logs contain no tokens or customer record values.

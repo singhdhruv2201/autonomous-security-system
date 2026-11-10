@@ -41,6 +41,7 @@ services:
       CRM_AGENT_TOKEN: ${CRM_AGENT_TOKEN:?Run make setup first}
       CRM_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
       CRM_RECOVERY_TOKEN: ${CRM_RECOVERY_TOKEN:?Run make setup first}
+      CRM_ACTION_TOKEN: ${CRM_ACTION_TOKEN:-}
     depends_on:
       simulator:
         condition: service_healthy
@@ -164,6 +165,27 @@ services:
       interval: 10s
       timeout: 3s
       retries: 10
+  awasi-agent:
+    build: .
+    image: helio-simulator:local
+    command: ["python", "-m", "helio_security.agent_worker"]
+    networks: [customer, platform]
+    environment:
+      SECURITY_DB_PATH: /data/security.sqlite3
+      AWASI_CHECKPOINT_DB: ${AWASI_CHECKPOINT_DB:-/data/checkpoints.sqlite3}
+      HELIO_COMPANY_ID: helio
+      CRM_URL: http://crm:8001
+      CRM_ACTION_TOKEN: ${CRM_ACTION_TOKEN:?Run make setup first}
+      CRM_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
+      AWASI_OWNER_DEADLINE_SECONDS: ${AWASI_OWNER_DEADLINE_SECONDS:-900}
+    volumes:
+      - security-state:/data
+    depends_on:
+      crm:
+        condition: service_healthy
+      security-api:
+        condition: service_healthy
+    restart: unless-stopped
 volumes:
   company-data:
   crm-data:

@@ -111,6 +111,7 @@ class GraphReader:
             RETURN sources, collect({employee_id:e.id,employee_name:e.name,employee_status:e.status,
                 agent_id:a.id,grant_id:g.id,grant_status:g.status,grant_version:g.version,
                 resource_id:d.id,classification:d.classification,scopes:g.scopes,
+                principal_status:coalesce(a.principal_status,'active'),record_count:d.record_count,
                 present:all(n IN nodes(p) WHERE n.present=true) AND all(r IN relationships(p) WHERE r.present=true),
                 directory_observed_at:e.last_observed_at,crm_observed_at:g.last_observed_at}) AS candidates
             """)[0]

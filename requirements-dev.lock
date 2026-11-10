@@ -4,6 +4,26 @@
 #
 #    pip-compile --constraint=requirements.lock --extra=dev --output-file=requirements-dev.lock --strip-extras pyproject.toml
 #
+aiofile==3.12.3
+    # via
+    #   -c requirements.lock
+    #   py-key-value-aio
+aiohappyeyeballs==2.7.1
+    # via
+    #   -c requirements.lock
+    #   aiohttp
+aiohttp==3.14.5
+    # via
+    #   -c requirements.lock
+    #   helio-simulator (pyproject.toml)
+aiosignal==1.4.0
+    # via
+    #   -c requirements.lock
+    #   aiohttp
+aiosqlite==0.22.1
+    # via
+    #   -c requirements.lock
+    #   langgraph-checkpoint-sqlite
 annotated-doc==0.0.5
     # via
     #   -c requirements.lock
@@ -12,87 +32,510 @@ annotated-types==0.8.0
     # via
     #   -c requirements.lock
     #   pydantic
+anthropic==2.8.0
+    # via
+    #   -c requirements.lock
+    #   langchain-anthropic
 anyio==4.15.1
     # via
     #   -c requirements.lock
+    #   anthropic
     #   httpx
+    #   httpx2
+    #   langsmith
+    #   mcp
+    #   py-key-value-aio
+    #   sse-starlette
     #   starlette
+    #   watchfiles
+attrs==26.1.0
+    # via
+    #   -c requirements.lock
+    #   aiohttp
+    #   cyclopts
+    #   jsonschema
+    #   jsonschema-path
+    #   referencing
+authlib==1.9.5
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+beartype==0.23.1
+    # via
+    #   -c requirements.lock
+    #   py-key-value-aio
+cachetools==8.0.0
+    # via
+    #   -c requirements.lock
+    #   py-key-value-aio
+caio==0.12.10
+    # via
+    #   -c requirements.lock
+    #   aiofile
 certifi==2026.10.23
     # via
+    #   -c requirements.lock
+    #   fastmcp-slim
     #   httpcore
     #   httpx
+    #   langchain-core
+    #   requests
+cffi==2.1.1
+    # via
+    #   -c requirements.lock
+    #   cryptography
+charset-normalizer==3.5.2
+    # via
+    #   -c requirements.lock
+    #   requests
 click==8.5.0
     # via
     #   -c requirements.lock
     #   uvicorn
+cryptography==50.0.2
+    # via
+    #   -c requirements.lock
+    #   authlib
+    #   joserfc
+    #   pyjwt
+cyclopts==5.4.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+distro==1.9.0
+    # via
+    #   -c requirements.lock
+    #   langsmith
+dnspython==2.9.2
+    # via
+    #   -c requirements.lock
+    #   email-validator
+docstring-parser==0.18.0
+    # via
+    #   -c requirements.lock
+    #   anthropic
+    #   cyclopts
+email-validator==2.3.0
+    # via
+    #   -c requirements.lock
+    #   pydantic
+exceptiongroup==1.3.1
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
 fastapi==0.162.0
     # via
     #   -c requirements.lock
     #   helio-simulator (pyproject.toml)
+fastmcp==4.1.8
+    # via
+    #   -c requirements.lock
+    #   langchain
+fastmcp-slim==4.1.8
+    # via
+    #   -c requirements.lock
+    #   fastmcp
+frozenlist==1.8.0
+    # via
+    #   -c requirements.lock
+    #   aiohttp
+    #   aiosignal
+griffelib==2.4.1
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
 h11==0.16.0
     # via
     #   -c requirements.lock
     #   httpcore
+    #   httpcore2
     #   uvicorn
 httpcore==1.0.9
-    # via httpx
+    # via
+    #   -c requirements.lock
+    #   httpx
+httpcore2==2.16.0
+    # via
+    #   -c requirements.lock
+    #   httpx2
 httpx==0.28.1
-    # via helio-simulator (pyproject.toml)
+    # via
+    #   -c requirements.lock
+    #   helio-simulator (pyproject.toml)
+    #   langchain-core
+    #   langgraph-sdk
+httpx2==2.16.0
+    # via
+    #   -c requirements.lock
+    #   anthropic
+    #   fastmcp-slim
+    #   langsmith
+    #   mcp
 idna==3.20
     # via
     #   -c requirements.lock
     #   anyio
+    #   email-validator
     #   httpx
+    #   httpx2
+    #   requests
+    #   yarl
 iniconfig==2.3.1
     # via pytest
+jiter==0.19.0
+    # via
+    #   -c requirements.lock
+    #   anthropic
+joserfc==1.8.0
+    # via
+    #   -c requirements.lock
+    #   authlib
+    #   fastmcp-slim
+jsonpatch==1.46
+    # via
+    #   -c requirements.lock
+    #   langchain-core
+jsonpointer==3.11
+    # via
+    #   -c requirements.lock
+    #   jsonpatch
+jsonref==1.1.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+jsonschema==4.26.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+    #   mcp
+jsonschema-path==0.5.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+jsonschema-specifications==2025.9.1
+    # via
+    #   -c requirements.lock
+    #   jsonschema
+langchain==1.4.10
+    # via
+    #   -c requirements.lock
+    #   helio-simulator (pyproject.toml)
+langchain-anthropic==1.7.10
+    # via
+    #   -c requirements.lock
+    #   langchain
+langchain-core==1.7.7
+    # via
+    #   -c requirements.lock
+    #   langchain
+    #   langchain-anthropic
+    #   langgraph
+    #   langgraph-checkpoint
+    #   langgraph-prebuilt
+    #   langgraph-sdk
+langchain-protocol==0.0.21
+    # via
+    #   -c requirements.lock
+    #   langchain-core
+    #   langgraph-sdk
+langgraph==1.2.20
+    # via
+    #   -c requirements.lock
+    #   langchain
+langgraph-checkpoint==4.3.1
+    # via
+    #   -c requirements.lock
+    #   langgraph
+    #   langgraph-checkpoint-sqlite
+    #   langgraph-prebuilt
+langgraph-checkpoint-sqlite==3.1.3
+    # via
+    #   -c requirements.lock
+    #   helio-simulator (pyproject.toml)
+langgraph-prebuilt==1.1.1
+    # via
+    #   -c requirements.lock
+    #   langgraph
+langgraph-sdk==0.4.14
+    # via
+    #   -c requirements.lock
+    #   langgraph
+langsmith==0.14.17
+    # via
+    #   -c requirements.lock
+    #   langchain-core
+markdown-it-py==4.3.0
+    # via
+    #   -c requirements.lock
+    #   rich
+mcp==2.3.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+mcp-types==2.3.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+    #   mcp
+mdurl==0.1.2
+    # via
+    #   -c requirements.lock
+    #   markdown-it-py
+multidict==7.2.1
+    # via
+    #   -c requirements.lock
+    #   aiohttp
+    #   yarl
 neo4j==5.28.8
     # via
     #   -c requirements.lock
     #   helio-simulator (pyproject.toml)
+openapi-pydantic==0.6.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
 opentelemetry-api==1.45.1
     # via
     #   -c requirements.lock
+    #   anthropic
     #   fastapi
+    #   fastmcp-slim
+    #   mcp
+orjson==3.13.0
+    # via
+    #   -c requirements.lock
+    #   langgraph-sdk
+    #   langsmith
+ormsgpack==1.13.1
+    # via
+    #   -c requirements.lock
+    #   langgraph-checkpoint
 packaging==26.3
-    # via pytest
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+    #   langchain-core
+    #   langsmith
+    #   pytest
+pathable==0.6.0
+    # via
+    #   -c requirements.lock
+    #   jsonschema-path
+platformdirs==4.14.5
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
 pluggy==1.7.0
     # via pytest
+propcache==0.5.4
+    # via
+    #   -c requirements.lock
+    #   aiohttp
+    #   yarl
+py-key-value-aio==0.4.6
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+pycparser==3.12
+    # via
+    #   -c requirements.lock
+    #   cffi
 pydantic==2.14.1
     # via
     #   -c requirements.lock
+    #   anthropic
     #   fastapi
+    #   fastmcp-slim
+    #   langchain
+    #   langchain-anthropic
+    #   langchain-core
+    #   langgraph
+    #   langsmith
+    #   mcp
+    #   mcp-types
+    #   openapi-pydantic
+    #   pydantic-settings
 pydantic-core==2.50.1
     # via
     #   -c requirements.lock
     #   pydantic
+pydantic-settings==2.16.2
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
 pygments==2.21.0
-    # via pytest
+    # via
+    #   -c requirements.lock
+    #   pytest
+    #   rich
+    #   rich-rst
+pyjwt==2.15.1
+    # via
+    #   -c requirements.lock
+    #   mcp
+pyperclip==1.11.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
 pytest==9.1.1
     # via helio-simulator (pyproject.toml)
+python-dotenv==1.2.4
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+    #   pydantic-settings
+python-multipart==0.0.33
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+    #   mcp
 pytz==2026.5
     # via
     #   -c requirements.lock
     #   neo4j
+pyyaml==6.0.3
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+    #   jsonschema-path
+    #   langchain-core
+referencing==0.37.0
+    # via
+    #   -c requirements.lock
+    #   jsonschema
+    #   jsonschema-path
+    #   jsonschema-specifications
+requests==2.34.2
+    # via
+    #   -c requirements.lock
+    #   langsmith
+    #   requests-toolbelt
+requests-toolbelt==1.0.0
+    # via
+    #   -c requirements.lock
+    #   langsmith
+rich==15.0.0
+    # via
+    #   -c requirements.lock
+    #   cyclopts
+    #   fastmcp-slim
+    #   rich-rst
+rich-rst==2.2.0
+    # via
+    #   -c requirements.lock
+    #   cyclopts
+rpds-py==2026.9.1
+    # via
+    #   -c requirements.lock
+    #   jsonschema
+    #   referencing
+slack-bolt==1.30.0
+    # via
+    #   -c requirements.lock
+    #   helio-simulator (pyproject.toml)
+slack-sdk==3.46.0
+    # via
+    #   -c requirements.lock
+    #   slack-bolt
+sniffio==1.3.1
+    # via
+    #   -c requirements.lock
+    #   anthropic
+    #   langsmith
+sqlite-vec==0.1.9
+    # via
+    #   -c requirements.lock
+    #   langgraph-checkpoint-sqlite
+sse-starlette==3.7.0
+    # via
+    #   -c requirements.lock
+    #   mcp
 starlette==1.9.0
     # via
     #   -c requirements.lock
     #   fastapi
+    #   fastmcp-slim
+    #   mcp
+    #   sse-starlette
+tenacity==9.2.1
+    # via
+    #   -c requirements.lock
+    #   langchain-core
+truststore==0.10.5
+    # via
+    #   -c requirements.lock
+    #   httpcore2
+    #   httpx2
 typing-extensions==4.16.0
     # via
     #   -c requirements.lock
+    #   aiohttp
+    #   aiosignal
+    #   anthropic
     #   anyio
+    #   exceptiongroup
     #   fastapi
+    #   fastmcp-slim
+    #   httpx2
+    #   langchain-core
+    #   langchain-protocol
+    #   langsmith
+    #   mcp
+    #   mcp-types
     #   opentelemetry-api
+    #   py-key-value-aio
     #   pydantic
     #   pydantic-core
+    #   pydantic-settings
+    #   referencing
     #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
     # via
     #   -c requirements.lock
     #   fastapi
+    #   mcp
     #   pydantic
+    #   pydantic-settings
+uncalled-for==0.6.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+urllib3==2.8.0
+    # via
+    #   -c requirements.lock
+    #   requests
+uuid-utils==0.19.0
+    # via
+    #   -c requirements.lock
+    #   langchain-core
+    #   langsmith
 uvicorn==0.54.0
     # via
     #   -c requirements.lock
+    #   fastmcp-slim
     #   helio-simulator (pyproject.toml)
+    #   mcp
+watchfiles==1.3.0
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+websockets==17.4
+    # via
+    #   -c requirements.lock
+    #   fastmcp-slim
+    #   langgraph-sdk
+    #   langsmith
+xxhash==4.1.0
+    # via
+    #   -c requirements.lock
+    #   langgraph
+    #   langsmith
+yarl==1.25.1
+    # via
+    #   -c requirements.lock
+    #   aiohttp
+zstandard==0.25.0
+    # via
+    #   -c requirements.lock
+    #   langsmith

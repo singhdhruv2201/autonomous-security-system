@@ -94,7 +94,10 @@ def test_missing_resources_are_404_and_no_remediation_route_exists(api):
     for path in ("/entities/missing", "/entities/missing/relationships", "/findings/missing", "/sync-runs/missing"):
         assert client.get(path, headers=auth(settings)).status_code == 404
     paths = client.get("/openapi.json").json()["paths"]
-    assert [(path, method) for path, ops in paths.items() for method in ops if method != "get"] == [("/sync-runs", "post")]
+    assert [(path, method) for path, ops in paths.items() for method in ops if method != "get"] == [
+        ("/cases/{case_id}/decisions", "post"),
+        ("/sync-runs", "post"),
+    ]
 
 
 def test_settings_require_distinct_strong_tokens_without_exposing_them():
@@ -134,10 +137,43 @@ def test_policy_coverage_comes_from_graph_not_retired_runtime(api, complete):
     assert result["items"][0]["coverage_status"] == ("current" if complete else "unknown")
 
 
-def test_overview_omits_retired_runtime_but_heartbeat_storage_survives(api):
+def test_cases_api_and_overview_heartbeat(api):
     client, settings, store, *_ = api
-    store.set_runtime("helio", "agent_worker", {"status": "ok"}, 100)
-    assert "policy_runtime" not in client.get("/overview", headers=auth(settings)).json()
-    store.initialize()
-    assert store.runtime("helio")["agent_worker"] == {"value": {"status": "ok"}, "updated_at": 100}
-    assert store.runtime("another-company") == {}
+    import time
+    # Check overview without heartbeat
+    ov1 = client.get("/overview", headers=auth(settings, "viewer")).json()
+    assert ov1["observation"]["agentic"] is False
+    assert ov1["observation"]["remediation_enabled"] is False
+
+    # Check overview with fresh heartbeat
+    store.set_runtime("helio", "agent_worker", {"status": "ok"}, time.time())
+    ov2 = client.get("/overview", headers=auth(settings, "viewer")).json()
+    assert ov2["observation"]["agentic"] is True
+    assert ov2["observation"]["remediation_enabled"] is True
+
+    # Check cases list initially empty
+    resp = client.get("/cases", headers=auth(settings, "viewer"))
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+
+    # Open a case directly via case_store
+    client.app.state.services.case_store.open_case("helio", "finding-1", route="fix_then_ask", now=time.time())
+    cases = client.get("/cases", headers=auth(settings, "viewer")).json()
+    assert cases["total"] == 1
+    case_id = cases["items"][0]["id"]
+
+    # Read case full
+    detail = client.get(f"/cases/{case_id}", headers=auth(settings, "viewer"))
+    assert detail.status_code == 200
+    assert detail.json()["id"] == case_id
+    assert "events" in detail.json()
+    assert "actions" in detail.json()
+
+    # Viewer cannot post decision
+    dec_resp = client.post(f"/cases/{case_id}/decisions", headers=auth(settings, "viewer"), json={"key": "k1", "choice": "retire"})
+    assert dec_resp.status_code == 403
+
+    # Operator can post decision
+    dec_resp = client.post(f"/cases/{case_id}/decisions", headers=auth(settings, "operator"), json={"key": "k1", "choice": "retire"})
+    assert dec_resp.status_code == 200
+    assert dec_resp.json()["status"] == "recorded"

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .graph import GraphStore
 from .platform_store import PlatformStore
+from .cases import CaseStore
 from .reader import GraphReader
 from .settings import Settings
 from .worker import ObservationWorker
@@ -31,6 +32,12 @@ Kind = Literal["Employee", "Team", "App", "Agent", "AppAccount", "ServiceAccount
 
 class SyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class DecisionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    choice: str
 
 
 def create_app(settings=None, *, graph=None, store=None, reader=None, start_worker=True, activity_client=None):
@@ -51,6 +58,8 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
             platform_graph.initialize()
             platform_store = store or PlatformStore(configured.db_path)
             platform_store.initialize()
+            platform_case_store = CaseStore(configured.db_path)
+            platform_case_store.initialize()
             platform_reader = reader or GraphReader(platform_graph)
             if start_worker:
                 worker = ObservationWorker(platform_store, platform_graph, platform_reader,
@@ -58,7 +67,7 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
                     interval=configured.sync_interval)
                 worker.start()
             app.state.services = SimpleNamespace(settings=configured, graph=platform_graph,
-                store=platform_store, reader=platform_reader, worker=worker)
+                store=platform_store, case_store=platform_case_store, reader=platform_reader, worker=worker)
             activity_url = os.getenv('AWASI_ACTIVITY_URL','')
             app.state.activity_client = activity_client or (ActivityClient(activity_url,configured.viewer_token) if activity_url else None)
             yield
@@ -118,12 +127,41 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
     @app.get("/overview", tags=["Observation"])
     def overview(identity=Depends(principal), service=Depends(services)):
         company = identity["company_id"]
+        runtime = service.store.runtime(company)
+        heartbeat = runtime.get("agent_worker")
+        agent_active = bool(heartbeat and 0 <= time.time() - heartbeat.get("updated_at", 0) <= 60)
         return {**service.graph.status(),
-                "observation": {"interval_seconds": service.settings.sync_interval, "agentic": False,
-                                "activity_ingestion": app.state.activity_client is not None, "remediation_enabled": False},
+                "observation": {"interval_seconds": service.settings.sync_interval, "agentic": agent_active,
+                                "activity_ingestion": app.state.activity_client is not None, "remediation_enabled": agent_active},
                 "finding_counts": {state: service.store.findings(company, status=state, limit=1)["total"]
                                    for state in ("open", "resolved")},
                 "latest_sync_run": next(iter(service.store.runs(company, limit=1)["items"]), None)}
+
+    @app.get("/cases", tags=["Cases"])
+    def list_cases(limit: Limit = 50, offset: Offset = 0, identity=Depends(principal), service=Depends(services)):
+        return service.case_store.list_cases(identity["company_id"], limit=limit, offset=offset)
+
+    @app.get("/cases/{case_id}", tags=["Cases"])
+    def get_case(case_id: str, identity=Depends(principal), service=Depends(services)):
+        item = service.case_store.get_case_full(case_id)
+        if item is None or item["company_id"] != identity["company_id"]:
+            raise HTTPException(404, "Case not found")
+        return item
+
+    @app.post("/cases/{case_id}/decisions", tags=["Cases"])
+    def record_decision(case_id: str, body: DecisionBody, identity=Depends(operator), service=Depends(services)):
+        item = service.case_store.get_case(case_id)
+        if item is None or item["company_id"] != identity["company_id"]:
+            raise HTTPException(404, "Case not found")
+        service.case_store.record_decision(
+            case_id,
+            key=body.key,
+            employee_id="operator",
+            source="api",
+            choice=body.choice,
+            now=time.time(),
+        )
+        return {"status": "recorded", "case_id": case_id, "key": body.key, "choice": body.choice}
 
     @app.get("/policies", tags=["Observation"])
     def policies(identity=Depends(principal), service=Depends(services)):

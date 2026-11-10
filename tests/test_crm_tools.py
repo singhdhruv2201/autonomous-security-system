@@ -9,8 +9,8 @@ def test_credentials_are_random_private_and_not_overwritten(tmp_path):
     generate_credentials(path)
     first = path.read_text()
     entries = dict(line.split("=", 1) for line in first.splitlines())
-    assert set(entries) == {"CRM_ADMIN_TOKEN", "CRM_MAYA_TOKEN", "CRM_AGENT_TOKEN", "CRM_OBSERVER_TOKEN", "CRM_RECOVERY_TOKEN", "CRM_IDENTITY_PUBLISHER_TOKEN"}
-    assert len(set(entries.values())) == 6
+    assert set(entries) == {"CRM_ADMIN_TOKEN", "CRM_MAYA_TOKEN", "CRM_AGENT_TOKEN", "CRM_OBSERVER_TOKEN", "CRM_RECOVERY_TOKEN", "CRM_IDENTITY_PUBLISHER_TOKEN", "CRM_ACTION_TOKEN"}
+    assert len(set(entries.values())) == 7
     assert all(len(value) >= 32 for value in entries.values())
     assert path.stat().st_mode & 0o777 == 0o600
     generate_credentials(path)

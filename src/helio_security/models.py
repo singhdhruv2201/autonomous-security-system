@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ID = Annotated[str, Field(min_length=1, max_length=200)]
 Text = Annotated[str, Field(max_length=500)]
@@ -27,6 +27,12 @@ class Employee(Named):
     team_id: ID
     title: Text
     status: Literal["active", "inactive"]
+    is_team_lead: bool = False
+
+    @field_validator("is_team_lead", mode="before")
+    @classmethod
+    def _coerce_team_lead(cls, v):
+        return bool(v)
 
 
 class Envelope(Record):
@@ -46,12 +52,14 @@ class App(Named):
 
 class Resource(Named):
     classification: Literal["internal", "confidential"]
+    record_count: int | None = None
 
 
 class Account(Named):
     kind: Literal["employee", "agent", "service"]
     owner_employee_id: ID
     role: Literal["user", "admin"]
+    principal_status: Literal["active", "disabled"] = "active"
 
 
 class Grant(Record):
