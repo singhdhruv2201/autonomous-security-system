@@ -56,14 +56,12 @@ the agent has already fetched.
 
 ## Employment and credential lifecycle
 
-The directory remains the authority for employment status. With `CRM_OWNER_MODE=enforce`,
-a dedicated publisher sends a complete, versioned directory projection every 60 seconds.
-Customer reads and writes require active owner/employee status and context younger
-than 120 seconds. Missing, expired, incomplete, or replayed context never authorizes
-access. The publisher retries a failed update after 5 seconds independently of Neo4j.
-Observation mode records the decision while retaining base authorization. Off mode
-retains the original offboarding demonstration. Employment changes do not revoke
-credentials or grants; those remain separate explicit administrative actions.
+The directory remains the authority for employment status. In v1 Phase 0, the
+platform's identity publisher is removed and all four optional CRM policy modes are
+`off`. Offboarding Maya therefore leaves her agent's independent CRM grant usable,
+so Awasi can detect the gap. Base authentication, grant checks and principal validity
+still apply. The old identity-projection endpoint and publisher credential remain
+inside the CRM until v1 Phase 8; do not enable owner enforcement without a publisher.
 
 The directory API remains read-only. Trusted local operators can run:
 
@@ -213,6 +211,11 @@ The Docker walkthrough additionally exercises the actual network boundary.
 
 ## Deterministic policies (phases 7–13)
 
+These controls are retained legacy CRM code, switched off in the v1 demo and
+scheduled for removal in v1 Phase 8. Awasi no longer imports their decisions into
+findings or publishes identity context. The details below describe the retained
+implementation and its historical acceptance, not enabled v1 coverage.
+
 The CRM evaluates policies inside its existing SQLite transaction. It makes no
 LLM, graph, or network calls on this path. Authorization matches both the canonical
 resource and `helio-crm` application. Existing admin and field restrictions always
@@ -221,8 +224,8 @@ back before the durable denial audit is committed; rejected responses release no
 customer bytes. Policy decisions include rule/version, mode, boundary, result and
 safe reason codes, linked to the request and exported through the signed webhook.
 
-Optional settings default to `off` for compatibility. This workstation has all four
-set to `enforce` in its ignored `.env`:
+Optional settings default to `off`. The v1 workstation also sets all four to `off`
+in its ignored `.env`:
 
 | Setting | Behavior |
 | --- | --- |
@@ -234,12 +237,12 @@ set to `enforce` in its ignored `.env`:
 | `CRM_RECORD_LIMIT` | Default 100 prepared disclosures per rolling 60 seconds; repeated reads count again |
 | `CRM_BULK_LIMIT` | Default blocks a single result of 50 or more records |
 
-Apply changes with `make up`. The dashboard obtains actual modes from authenticated
-CRM inventory, marks stale configuration unknown, and renders policy-specific
-findings. `make setup` adds the publisher credential while preserving every existing
-credential. Additive migrations preserve grants, revocations, activity identities,
-legacy audit consumers and inactive-owner finding IDs/history. Back up SQLite before
-upgrading; downgrading the executable across schema changes is not supported.
+Apply changes with `make up`. The dashboard now shows only the inactive-owner
+observation rule and its graph coverage. CRM decisions remain in Activity evidence,
+without opening new activity incidents. `make setup` still provides the CRM publisher
+credential until Phase 8, but the security service no longer receives it. Existing
+schemas, grants and history remain intact when upgrading; only an explicitly
+requested demo-volume reset clears them.
 
 The shared transactional rolling-event store serializes competing requests. Record
 reservations remain charged after a disconnect or lost response; delivery evidence
@@ -283,7 +286,9 @@ incidents remain open until a later incident-management workflow is implemented;
 missing events or elapsed time never silently resolve them. The existing graph
 posture rule retains its explicit resolve/reopen behavior.
 
-### Acceptance evidence — 2026-10-31
+### Historical acceptance evidence — 2026-10-31
+
+This records the earlier release; it is not the current v1 configuration.
 
 - `make test-integration`: **500 passed**, including the real Neo4j tests, local
   HTTP services and isolated SQLite databases. `make test-ui`: **19 passed**.
@@ -325,5 +330,5 @@ posture rule retains its explicit resolve/reopen behavior.
 
 Local logs, benchmark details, screenshots and backups are in the ignored
 `work/phase7-13-20261031/` directory. The existing 10,000-retained-event cap per
-stream still applies; this work does not add phase-27 retention or qualify an
+stream still applies; this work does not add automatic retention or qualify an
 unattended production deployment.

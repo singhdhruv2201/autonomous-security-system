@@ -26,8 +26,7 @@ flowchart LR
     CRM -->|observer metadata only| Worker
 ```
 
-The worker and API share the `security-api` service. Only this service and the
-diagnostic `graph-sync` service join both networks. Customer services do not join
+The worker and API share the `security-api` service. Only this service joins both networks. Customer services do not join
 the Neo4j network. The platform mounts only its own `security-state` volume; it
 has no customer SQLite mounts or CRM administrator, employee, or agent tokens.
 All published ports bind to localhost. This is a local development boundary,
@@ -55,7 +54,8 @@ The directory and CRM keep their existing ports, data, and credentials. The API
 starts independently of customer API health once Neo4j is ready. A customer
 outage becomes connector failure evidence rather than a reason to erase history.
 
-By default the worker requests an observation on startup and every **60 seconds**.
+The worker requests an observation on startup. The v1 local configuration repeats
+every **15 seconds**; the unset fallback remains 60 seconds.
 `SECURITY_SYNC_INTERVAL` can be set locally to 5–3600 seconds, or `0` to disable
 scheduled observations while retaining manually requested background runs.
 Apply configuration changes by recreating the service with `make up`.
@@ -72,6 +72,7 @@ schema are public on the local service; health reveals no company data.
 | GET | `/entities/{id}` | One current or previously observed entity |
 | GET | `/entities/{id}/relationships` | Current one-hop neighborhood, including incoming edges |
 | GET | `/graph` | Bounded current graph; optional `kind`, `limit`, `edge_limit` |
+| GET | `/policies` | Inactive-owner rule, conditions and graph coverage |
 | GET | `/connectors` | Last success/attempt, safe error codes, freshness |
 | GET | `/findings` | Persistent finding page; optional `status=open` or `resolved` |
 | GET | `/findings/{id}` | Evidence, reason, suggested fix, latest 100 transition events and total event count |
@@ -129,8 +130,8 @@ sync jobs, and platform audit records are in the separate SQLite platform store.
 - A lifecycle event retains the evidence used at that transition. This supplements
   the graph's latest-state projection; it is not a complete activity-event archive.
 
-The existing Helio demo already has the Sales Research Agent's grant revoked.
-Its finding list can therefore legitimately be empty. Integration tests use
+A previously revoked Sales Research Agent grant can legitimately leave the finding
+list empty. A fresh v1 reset seeds its active grant for the offboarding scenario. Integration tests use
 isolated companies to exercise the full open → unverified → recovered → resolved
 lifecycle without resetting your running simulator or fabricating findings.
 
@@ -145,10 +146,8 @@ Finding updates and run completion commit together. Older evaluations cannot
 overwrite newer assessments.
 
 Source observations are individually atomic, not one atomic snapshot of the whole
-company. API views include freshness and provenance. The original `make graph-sync`
-and `make graph-risks` remain graph-only diagnostics: they bypass platform job and
-finding history. Prefer `make security-sync` for the product workflow; a subsequent
-worker run reconciles any graph-only changes.
+company. API views include freshness and provenance. Use `make security-sync` for
+an extra observation and `make security-runs` to inspect the result.
 
 The credentials represent local viewer/operator roles, not individual human
 identities. Production SSO, per-user audit identity, tenant provisioning,
@@ -171,21 +170,16 @@ full API → worker → directory/CRM → Neo4j → finding-history flow. Integr
 tests delete only their own `test-*` graph namespaces.
 
 
-## Activity policies and identity publication
+## v1 observation scope
 
-Phases 7–13 add an independent policy worker to `security-api`. Its dedicated
-publisher credential can only update the CRM identity projection. It has no CRM
-administrator or customer-access credential. It also observes policy configuration
-and consumes authenticated `/activity/policy-events` pages from the ingest service.
-Import cursors and finding/history changes commit together. Replays deduplicate by
-company, rule, source instance and request (or the stable failure-cooldown identity);
-a reset requires operator review rather
-than silently skipping evidence. Neo4j observation failures do not stop this worker.
+The platform registry contains only `inactive_owner_agent_access`. `/policies`
+reports its conditions and coverage from the directory/CRM graph status. `/overview`
+reports observation and finding status, without the retired CRM policy-worker runtime.
+The identity publisher and activity-to-finding importer have been removed. A denied
+CRM request remains activity evidence; it does not automatically become a ticket.
 
-`/policies` reports all seven implemented policy definitions, versions, lifecycle
-kinds and observed CRM modes. `/overview` includes publisher/import/configuration
-health. Posture findings retain the 15-minute freshness requirement; historical
-activity incidents do not become unknown merely because their occurrence is old or
-graph coverage is stale. New incidents include redacted decision and request evidence.
-See [CRM policy configuration](crm.md#deterministic-policies-phases-713) for thresholds,
-failure behavior, administration and the deliberately limited detector coverage.
+Capture, delivery, recovery and the Activity tab remain available unchanged. Existing
+activity incidents in an upgraded database remain readable as historical CRM-policy
+findings; no tables are dropped or old findings silently resolved. `set_runtime` and
+`runtime` remain available internally for a later worker heartbeat. The next steps
+are in the [v1 plan](awasi-v1-plan.md).

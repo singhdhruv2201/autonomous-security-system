@@ -21,8 +21,6 @@ from .reader import GraphReader
 from .settings import Settings
 from .worker import ObservationWorker
 from .policies import POLICIES
-from .policy_worker import PolicyWorker, IdentityPublisher
-from .activity_worker import RecoveryClient
 from .activity_client import ActivityClient, ActivityUnavailable, activity_query
 
 bearer = HTTPBearer(auto_error=False)
@@ -41,7 +39,6 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
         configured = settings or Settings.from_environment()
         owned_driver = None
         worker = None
-        policy_worker = None
         try:
             platform_graph = graph
             if platform_graph is None:
@@ -64,24 +61,15 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
                 store=platform_store, reader=platform_reader, worker=worker)
             activity_url = os.getenv('AWASI_ACTIVITY_URL','')
             app.state.activity_client = activity_client or (ActivityClient(activity_url,configured.viewer_token) if activity_url else None)
-            if start_worker:
-                publisher = (IdentityPublisher(configured.directory_url,configured.crm_url,configured.publisher_token)
-                             if configured.publisher_token else None)
-                policy_worker = PolicyWorker(platform_store,configured.company_id,activity_client=app.state.activity_client,
-                    publisher=publisher,crm_client=RecoveryClient(configured.crm_url,configured.observer_token))
-                policy_worker.start()
-            app.state.policy_worker = policy_worker
             yield
         finally:
-            if policy_worker:
-                policy_worker.stop()
             if worker:
                 worker.stop()
             if owned_driver:
                 owned_driver.close()
 
     app = FastAPI(title="Helio Security Platform", version="0.3.0", lifespan=lifespan,
-        description="Observation, inventory, connector health and persistent findings. Publishes scoped CRM identity context; no automatic remedies.")
+        description="Observation, inventory, connector health and persistent findings. No automatic remedies.")
 
     async def unavailable(request, error):
         return JSONResponse(status_code=503, content={"detail": "Security data is temporarily unavailable"})
@@ -133,34 +121,16 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
         return {**service.graph.status(),
                 "observation": {"interval_seconds": service.settings.sync_interval, "agentic": False,
                                 "activity_ingestion": app.state.activity_client is not None, "remediation_enabled": False},
-                "policy_runtime": service.store.runtime(company),
                 "finding_counts": {state: service.store.findings(company, status=state, limit=1)["total"]
                                    for state in ("open", "resolved")},
                 "latest_sync_run": next(iter(service.store.runs(company, limit=1)["items"]), None)}
 
     @app.get("/policies", tags=["Observation"])
     def policies(identity=Depends(principal), service=Depends(services)):
-        runtime=service.store.runtime(identity['company_id'])
-        configured=runtime.get('configuration',{})
-        fresh=bool(configured and 0<=time.time()-configured['updated_at']<=120)
-        modes=configured.get('value',{}).get('modes',{})
-        items=[]
-        for p in POLICIES.values():
-            item=p.view()
-            if p.lifecycle!='posture':
-                mode=modes.get(p.id,'off')
-                item.update(mode=mode,enabled=bool(p.implemented and fresh and mode!='off'),
-                            coverage_status='current' if fresh and p.id in modes else 'unknown')
-                if p.id=='owner_status' and mode!='off':
-                    publisher=runtime.get('identity_publisher',{})
-                    if (publisher.get('value',{}).get('status')!='ok' or
-                            not 0<=time.time()-publisher.get('updated_at',0)<=120):
-                        item['coverage_status']='unknown'
-            else:
-                item['coverage_status']='current' if service.graph.status()['coverage_complete'] else 'unknown'
-            items.append(item)
-        return {"company_id": identity["company_id"], "items": items,
-                "configuration":configured.get('value'),"runtime":runtime}
+        status = service.graph.status()
+        coverage_status = "current" if status["coverage_complete"] else "unknown"
+        return {"company_id": identity["company_id"],
+                "items": [{**p.view(), "coverage_status": coverage_status} for p in POLICIES.values()]}
 
     @app.get('/activity', tags=['Activity'])
     def list_activity(identity=Depends(principal), query=Depends(activity_query)):

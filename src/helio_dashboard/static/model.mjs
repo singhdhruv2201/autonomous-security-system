@@ -38,8 +38,6 @@ export function securityState(state) {
     !state.overview.coverage_complete ||
     !state?.policies?.items?.some((p) => p.enabled) ||
     state?.policies?.items?.some((p) => p.coverage_status === 'unknown') ||
-    Object.entries(state?.overview?.policy_runtime ?? {}).some(([key, record]) =>
-      key !== 'configuration' && (record.value?.status !== 'ok' || Date.now()/1000 - record.updated_at > 120)) ||
     pending
   )
     return {

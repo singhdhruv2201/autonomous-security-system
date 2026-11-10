@@ -16,10 +16,6 @@ test:
 test-ui:
 	node --test tests/frontend/*.test.mjs
 
-.PHONY: benchmark-activity
-benchmark-activity:
-	PYTHONPATH=src .venv/bin/python -m helio_security.activity_benchmark run $(BENCHMARK_ARGS)
-
 agent:
 	docker compose run --rm --no-deps sales-agent
 
@@ -38,16 +34,7 @@ revoke-agent:
 update-customer:
 	docker compose exec -T crm python -m helio_crm.control update-customer
 
-.PHONY: graph-sync graph-status graph-risks test-integration
-graph-sync:
-	docker compose run --rm --no-deps graph-sync
-
-graph-status:
-	docker compose run --rm --no-deps graph-sync python -m helio_security.cli status
-
-graph-risks:
-	docker compose run --rm --no-deps graph-sync python -m helio_security.cli risks
-
+.PHONY: test-integration
 test-integration:
 	@.venv/bin/python -c 'import os; from pathlib import Path; import pytest; values=dict(line.split("=",1) for line in Path(".env").read_text().splitlines() if "=" in line and not line.lstrip().startswith("#")); os.environ["NEO4J_PASSWORD"]=values["NEO4J_PASSWORD"]; os.environ["NEO4J_TEST_URI"]="bolt://127.0.0.1:7687"; raise SystemExit(pytest.main(["-q"]))'
 

@@ -203,17 +203,3 @@ class ActivityStore(Inbox):
                     'stages':stages})
             return {'company_id':company, 'enabled':True, 'items':items, 'total':total, 'snapshot':snapshot,
                     'next_before':groups[limit-1]['first_id'] if len(groups)>limit else None}
-
-    def policy_events(self, company, *, after=0, limit=100):
-        if not 0 <= after <= 2**53 or not 1 <= limit <= 200:
-            raise ValueError('Invalid policy cursor')
-        with self.transaction() as db:
-            instance=db.execute("SELECT value FROM activity_metadata WHERE key='instance_id'").fetchone()[0]
-            high=db.execute('SELECT coalesce(max(id),0) FROM normalized_events WHERE company_id=?',(company,)).fetchone()[0]
-            if after>high: raise ValueError('Policy cursor regressed')
-            rows=db.execute('SELECT id,payload FROM normalized_events WHERE company_id=? AND id>? ORDER BY id LIMIT ?',
-                            (company,after,limit)).fetchall()
-            return dict(company_id=company,instance_id=instance,after=after,
-                        next_after=rows[-1]['id'] if rows else after,high_watermark=high,
-                        items=[{'id':r['id'],'event':json.loads(r['payload'])} for r in rows
-                               if json.loads(r['payload'])['event_type']=='operation.completed'])

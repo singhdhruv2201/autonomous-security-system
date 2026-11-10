@@ -14,7 +14,7 @@ test('finding evidence formats both activity ISO times and observation epoch tim
 });
 
 test('unknown policy coverage prevents a clear security verdict',()=>{
- const state={errors:{},overview:{coverage_complete:true},findings:{items:[]},policies:{items:[{enabled:true,coverage_status:'current'},{enabled:false,mode:'enforce',coverage_status:'unknown'}]}};
+ const state={errors:{},overview:{coverage_complete:true},findings:{items:[]},policies:{items:[{enabled:true,coverage_status:'unknown'}]}};
  assert.equal(securityState(state).tone,'warn');
 });
 
@@ -25,14 +25,22 @@ test('activity shows actual policy decisions and escapes evidence',()=>{
  assert.doesNotMatch(html,/policies are not enabled/);
 });
 
-test('policy cards distinguish enforcement, observation and unavailable configuration',async()=>{
+test('policy cards describe observation and graph coverage without CRM runtime',async()=>{
  let html=''; const element={addEventListener(){},contains(){return false;},get innerHTML(){return html;},set innerHTML(value){html=value;}};
  globalThis.document={hidden:false,activeElement:null,addEventListener(){},querySelector(s){return ['#main','#navigation','#company-toggle'].includes(s)?element:null;}};
  globalThis.location={hash:'#policies'}; globalThis.window={addEventListener(){}}; globalThis.setInterval=()=>{};
  globalThis.fetch=async()=>({ok:true,json:async()=>({errors:{},policies:{items:[
-  {id:'a',name:'Enforced policy',mode:'enforce',enabled:true,coverage_status:'current',conditions:[],sources:['crm']},
-  {id:'b',name:'Unknown policy',mode:'off',enabled:false,coverage_status:'unknown',conditions:[],sources:['crm']},
+  {id:'a',name:'Inactive owner <test>',mode:'enforce',enabled:true,coverage_status:'current',conditions:['Owner is inactive'],sources:['directory','crm']},
+  {id:'b',name:'Unknown policy',enabled:true,coverage_status:'unknown',conditions:[],sources:['directory','crm']},
  ]}})});
  await import('../../src/helio_dashboard/static/app.mjs'); await new Promise(r=>setImmediate(r));
- assert.match(html,/Enforcing/); assert.match(html,/Coverage unknown/); assert.doesNotMatch(html,/>Enabled</);
+ assert.match(html,/Observing/); assert.match(html,/Coverage unknown/);
+ assert.match(html,/Inactive owner &lt;test&gt;/); assert.match(html,/Owner is inactive/);
+ assert.doesNotMatch(html,/Enforcing|Observe or enforce|CRM-reported|Disabled|configuration/);
+});
+
+
+test('retired CRM worker runtime does not change graph observation coverage', () => {
+ const state = {errors:{}, overview:{coverage_complete:true, policy_runtime:{identity_publisher:{value:{status:'unavailable'},updated_at:0}}}, findings:{items:[]}, policies:{items:[{enabled:true,coverage_status:'current'}]}};
+ assert.equal(securityState(state).tone, 'good');
 });

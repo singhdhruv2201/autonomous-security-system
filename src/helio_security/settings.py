@@ -18,12 +18,9 @@ class Settings:
     graph_user: str = "neo4j"
     graph_password: str = ""
     sync_interval: int = 60
-    publisher_token: str = ""
 
     def __post_init__(self):
         tokens = (self.operator_token, self.viewer_token, self.observer_token)
-        if self.publisher_token:
-            tokens += (self.publisher_token,)
         if any(not isinstance(t, str) or len(t) < 32 for t in tokens) or len(set(tokens)) != len(tokens):
             raise ValueError("Distinct strong platform and observer credentials required; run make setup")
         if self.sync_interval != 0 and not 5 <= self.sync_interval <= 3600:
@@ -39,7 +36,6 @@ class Settings:
                 crm_url=os.getenv("CRM_URL", "http://127.0.0.1:8001"),
                 graph_uri=os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687"),
                 graph_user=os.getenv("NEO4J_USER", "neo4j"), graph_password=os.environ["NEO4J_PASSWORD"],
-                sync_interval=int(os.getenv("SECURITY_SYNC_INTERVAL", "60")),
-                publisher_token=os.getenv('CRM_IDENTITY_PUBLISHER_TOKEN',''))
+                sync_interval=int(os.getenv("SECURITY_SYNC_INTERVAL", "60")))
         except (KeyError, ValueError):
             raise ValueError("Invalid security service configuration; check local settings and run make setup") from None

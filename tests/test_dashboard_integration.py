@@ -52,7 +52,10 @@ def test_dashboard_real_graph_refresh_and_finding_lifecycle(graph, sources, tmp_
             assert state["overview"]["counts"]["Employee"] == 20
             assert len(state["graph"]["nodes"]) == 54
             assert len(state["graph"]["edges"]) == 75
+            assert [p["id"] for p in state["policies"]["items"]] == ["inactive_owner_agent_access"]
             assert state["policies"]["items"][0]["enabled"] is True
+            assert state["policies"]["items"][0]["coverage_status"] == "current"
+            assert "policy_runtime" not in state["overview"]
             assert state["overview"]["observation"]["remediation_enabled"] is False
             directory.set_employee_status("emp-maya-chen", "inactive")
             refresh()

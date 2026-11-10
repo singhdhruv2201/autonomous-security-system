@@ -9,13 +9,14 @@ The separate security backend observes the directory and CRM through their APIs,
 builds a Neo4j company graph, and persists security findings. Its authenticated
 API runs on port 8002 with a background observation worker. The Awasi dashboard
 on port 3000 shows company security, the graph, agents, apps, policies, and findings.
-Phases 7–13 add a versioned policy registry, inline resource and lifecycle checks,
-rolling extraction/failure limits, and bounded secret/PII scanning. See
-[policy configuration and enforcement](docs/crm.md#deterministic-policies-phases-713).
-AI investigation, Slack, and automated remediation remain later milestones.
+The platform currently observes one rule: inactive owners whose agents retain
+confidential CRM access. Optional owner, volume, failure and content controls are
+switched off for the v1 demo; CRM authentication, grants and principal validity
+remain enforced. AI investigation, Slack, and automated remediation are future
+steps in the canonical [Awasi v1 plan](docs/awasi-v1-plan.md).
 The CRM also has opt-in request/response activity capture and signed background
 webhook delivery, gap recovery, durable processing and a request-level Activity view
-(phases 0–6). See [activity startup and recovery](docs/activity-processing.md) and
+(retained as evidence infrastructure). See [activity startup and recovery](docs/activity-processing.md) and
 [signed delivery and replay](docs/activity-delivery.md).
 See [dashboard guide](docs/dashboard.md), [security API and workflow](docs/backend.md) and [graph walkthrough](docs/graph.md).
 
@@ -44,10 +45,10 @@ this development environment is not intended for public exposure.
 
 Neo4j Browser is available at **http://localhost:7474/browser/**. Connect to
 `bolt://localhost:7687` as `neo4j`, using `NEO4J_PASSWORD` from your local `.env`.
-The security worker refreshes observations every 60 seconds. Use `make security-sync`
+The v1 local `.env` sets `SECURITY_SYNC_INTERVAL=15` (the fallback is 60 seconds).
+Use `make security-sync`
 to queue an additional refresh, `make security-runs` to track it, and
-`make security-findings` to view persisted risks. The older `make graph-sync`,
-`make graph-status`, and `make graph-risks` commands remain graph-only diagnostics.
+`make security-findings` to view persisted risks.
 
 ## CRM demo
 
@@ -64,8 +65,9 @@ make audit              # Inspect recorded reads, writes, denials, and revocatio
 
 The `make` command may also exit 2 when a recipe fails; the agent itself exits 2
 for access denial. It exits 1 for configuration/network errors.
-With `CRM_OWNER_MODE=enforce`, fresh directory publication also blocks the owner
-and agent before manual revocation. The default is off; this workstation enables it.
+The v1 setup leaves `CRM_OWNER_MODE`, `CRM_VOLUME_MODE`, `CRM_FAILURE_MODE`
+and `CRM_CONTENT_MODE` off. Directory offboarding alone does not revoke CRM access.
+The platform observes the gap; a later v1 phase will pause the agent.
 The walkthrough intentionally leaves Maya inactive and the grant revoked.
 See [CRM details and reset instructions](docs/crm.md) for the access model,
 API contract, and how to repeat the scenario with fresh CRM data.

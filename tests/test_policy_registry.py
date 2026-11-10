@@ -1,4 +1,4 @@
-"""Rule isolation and historical incident semantics on the real platform database."""
+"""The v1 posture rule and preservation of existing platform history."""
 import json
 import uuid
 
@@ -9,30 +9,39 @@ from helio_security.rules import RULE_ID
 from test_platform_store import evaluation, finish
 
 
-def test_registry_is_versioned_and_unimplemented_rules_are_not_enabled():
+def test_registry_contains_only_the_versioned_inactive_owner_rule():
     from helio_security.policies import POLICIES
+    assert set(POLICIES) == {RULE_ID}
+    assert POLICIES[RULE_ID].enabled is True
     assert POLICIES[RULE_ID].version == 1
     assert POLICIES[RULE_ID].lifecycle == 'posture'
     assert all(not p.enabled for p in POLICIES.values() if not p.implemented)
 
 
-def test_rules_have_independent_watermarks_and_reconciliation(tmp_path):
-    store = PlatformStore(tmp_path / 'platform.db')
+def test_retired_policy_history_remains_readable_without_reactivating_it(tmp_path):
+    store = PlatformStore(tmp_path / "platform.db")
     store.initialize()
     finish(store, evaluation(200), 200)
-    original = store.findings('helio', now=200)['items'][0]
-    expected = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(['helio', RULE_ID, 'maya', 'sales', 'grant-sales', 'customers'])))
-    assert original['id'] == expected
-    incident = {**evaluation(100), 'rule': 'resource_permissions'}
-    finish(store, incident, 201)
-    assert store.findings('helio', now=201)['total'] == 2
-    finish(store, {**incident, 'observed_at': 101, 'candidates': []}, 202)
-    items = {f['rule']: f for f in store.findings('helio', now=10000)['items']}
-    assert items[RULE_ID]['assessment'] == 'unknown'  # stale posture
-    assert items['resource_permissions']['assessment'] == 'current'  # durable incident
-    assert items['resource_permissions']['title'] != items[RULE_ID]['title']
+    original = store.findings("helio", now=200)["items"][0]
+    expected = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(["helio", RULE_ID, "maya", "sales", "grant-sales", "customers"])))
+    assert original["id"] == expected
+    # A database written by the previous release contains activity incidents.
+    with store.connection() as db:
+        db.execute("INSERT INTO findings SELECT 'legacy-incident', company_id, 'resource_permissions', severity, status, assessment, first_seen, last_seen, last_evaluated, last_verified, resolved_at, evidence, reason FROM findings WHERE id=?", (expected,))
+        db.execute("INSERT INTO events(company_id,finding_id,type,occurred_at,run_id,reason,evidence) VALUES ('helio','legacy-incident','opened',200,NULL,'access_denied','{}')")
+        db.execute("INSERT INTO activity_import_state VALUES ('helio','old-instance',42,200)")
     store.initialize()
-    assert store.finding('helio', expected, now=201)['event_count'] == 1
+    finish(store, evaluation(201), 201)
+    items = {f["rule"]: f for f in store.findings("helio", now=10000)["items"]}
+    assert items[RULE_ID]["assessment"] == "unknown"
+    legacy = store.finding("helio", "legacy-incident", now=10000)
+    assert legacy["title"] == "Historical CRM policy: resource_permissions"
+    assert legacy["event_count"] == 1 and legacy["events"][0]["reason"] == "access_denied"
+    assert legacy["status"] == "open" and legacy["lifecycle"] == "incident"
+    with store.connection() as db:
+        assert db.execute("SELECT cursor FROM activity_import_state WHERE company_id='helio'").fetchone()[0] == 42
+    assert store.finding("other", "legacy-incident") is None
+    assert store.finding("helio", expected, now=201)["event_count"] == 1
 
 
 def test_unknown_policy_rejected_atomically(tmp_path):

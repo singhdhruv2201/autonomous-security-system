@@ -4,12 +4,11 @@ import json
 import sqlite3
 import time
 import uuid
-from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
 
 from .rules import RULE_ID
-from .policies import policy
+from .policies import Policy, policy
 
 
 class PlatformStore:
@@ -199,7 +198,12 @@ class PlatformStore:
     def _finding(row, now):
         result = dict(row)
         result["evidence"] = json.loads(result["evidence"])
-        definition = policy(result["rule"])
+        try:
+            definition = policy(result["rule"])
+        except ValueError:
+            # Retired rules remain readable on existing databases, not evaluable.
+            definition = Policy(result["rule"], f"Historical CRM policy: {result['rule']}",
+                                "Retained evidence from a retired CRM policy.")
         result["lifecycle"] = definition.lifecycle
         result["rule_version"] = definition.version
         result["evidence_fresh"] = result["assessment"] == "current" and (definition.lifecycle == "incident" or 0 <= now - result["last_verified"] <= 900)
@@ -246,56 +250,6 @@ class PlatformStore:
 
     def audit(self, company, limit=50, offset=0):
         return self._list("audit", company, limit, offset)
-
-    def activity_cursor(self,company):
-        with self.connection() as db:
-            row=db.execute('SELECT cursor FROM activity_import_state WHERE company_id=?',(company,)).fetchone()
-            return row[0] if row else 0
-
-    def import_activity(self,company,page,now):
-        from .webhooks import EVENT
-        if page.get('company_id')!=company:
-            raise ValueError('Wrong policy company')
-        try:
-            uuid.UUID(page['instance_id'])
-            if any(type(page[k]) is not int for k in ('after','next_after','high_watermark')) or not 0<=page['after']<=page['next_after']<=page['high_watermark']:
-                raise ValueError()
-            if len(page['items'])>200: raise ValueError()
-            validated=[]
-            previous=page['after']
-            for item in page['items']:
-                if type(item['id']) is not int or not previous<item['id']<=page['next_after']: raise ValueError()
-                previous=item['id']
-                event=EVENT.validate_python(item['event']).model_dump()
-                if event['company_id']!=company or event['source']!='helio-crm' or event['event_type']!='operation.completed': raise ValueError()
-                validated.append(event)
-        except (KeyError,TypeError,ValueError):
-            raise ValueError('Invalid policy event page') from None
-        with self.connection() as db:
-            db.execute('BEGIN IMMEDIATE')
-            state=db.execute('SELECT * FROM activity_import_state WHERE company_id=?',(company,)).fetchone()
-            if state and state['instance_id']!=page['instance_id']: raise ValueError('Policy source reset')
-            cursor=state['cursor'] if state else 0
-            if page['next_after']<=cursor: return
-            if page['after']!=cursor: raise ValueError('Noncontiguous policy import')
-            for event in validated:
-                for rule in {d['rule'] for d in event.get('policy_decisions',[]) if d['result']!='allow'}:
-                    definition=policy(rule)
-                    checks=[d for d in event['policy_decisions'] if d['rule']==rule and d['result']!='allow']
-                    incident_key=next((d.get('incident_key') for d in checks if d.get('incident_key')),None) if rule=='authentication_failures' else None
-                    identity=json.dumps([company,rule,event['source_instance_id'],incident_key or event['request_id']])
-                    finding_id=str(uuid.uuid5(uuid.NAMESPACE_URL,identity))
-                    if db.execute('SELECT 1 FROM findings WHERE id=?',(finding_id,)).fetchone(): continue
-                    evidence={k:event[k] for k in ('source','source_instance_id','event_id','request_id','actor_id','owner_employee_id','resource_id','action','status_code','occurred_at')}
-                    evidence['decisions']=checks
-                    reason=checks[0]['reason']
-                    observed=datetime.fromisoformat(event['occurred_at']).timestamp()
-                    serialized=json.dumps(evidence,sort_keys=True)
-                    db.execute("INSERT INTO findings VALUES (?,?,?,?,'open','current',?,?,?,?,NULL,?,?)",
-                               (finding_id,company,rule,definition.severity,now,now,now,observed,serialized,reason))
-                    self._event(db,company,finding_id,'opened',now,None,reason)
-            db.execute('INSERT OR REPLACE INTO activity_import_state VALUES (?,?,?,?)',
-                       (company,page['instance_id'],page['next_after'],now))
 
     def set_runtime(self,company,name,value,now):
         with self.connection() as db:

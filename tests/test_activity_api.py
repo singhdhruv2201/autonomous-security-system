@@ -25,6 +25,7 @@ def test_activity_api_requires_read_credentials_and_bounds_filters(tmp_path, rec
         response = client.get('/activity',headers=auth(operator)).json()
         assert response['total'] == 1 and response['company_id'] == 'helio'
         assert viewer not in str(response)
+        assert client.get('/activity/policy-events', headers=auth(viewer)).status_code == 404
         for query in ('limit=201','before=-1','outcome=invalid','actor_id='+('x'*201),'snapshot=-1'):
             assert client.get('/activity?'+query,headers=auth(viewer)).status_code == 422
         assert client.get('/activity?company_id=other',headers=auth(viewer)).json()['company_id'] == 'helio'

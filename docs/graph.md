@@ -24,9 +24,8 @@ flowchart LR
 ```
 
 The services use separate customer and platform Compose networks and data volumes.
-Only the API/worker and diagnostic connector container join both networks.
-The `graph-sync` container has no customer database mounts
-and receives only the observer token and graph credentials. It cannot edit
+Only the security API/worker joins both networks. It has no customer database
+mounts and uses only the observer token for CRM metadata. It cannot edit
 customers or revoke access through the CRM. Neo4j and both source APIs publish
 only to localhost.
 
@@ -35,9 +34,9 @@ only to localhost.
 ```sh
 make setup              # Add missing credentials; preserve existing values
 make up                 # Start directory, CRM, Neo4j and preserve data volumes
-make graph-sync         # One complete observation per source
-make graph-status       # Counts, last-success times, errors, freshness
-make graph-risks        # Inactive owners whose agents retain sensitive access
+make security-sync      # Queue an observation; inspect completion with security-runs
+make security-overview  # Counts, source freshness and current findings
+make security-findings  # Inactive owners whose agents retain sensitive access
 ```
 
 Open http://localhost:7474/browser/, connect to `bolt://localhost:7687`, and use
@@ -110,9 +109,9 @@ relationships**: 20 employees, 5 teams, 1 app, 20 app accounts, 1 agent,
   are stale even if the last attempt succeeded. Newer observations cannot be
   overwritten by older requests finishing late.
 
-The security API worker automatically synchronizes every 60 seconds by default.
+The v1 local configuration synchronizes every 15 seconds (60-second fallback).
 Use `make security-sync` to queue a refresh and update persistent findings.
-`make graph-sync` remains a graph-only diagnostic. Reads are atomic within each
+Reads are atomic within each
 source, not across both sources. Each source's observation time stays visible.
 
 ## Demonstrated security value
@@ -121,8 +120,8 @@ The first rule follows:
 
 `Inactive employee → owns agent → active grant → confidential data resource`
 
-For a fresh simulator, `make offboard` followed by `make graph-sync` and
-`make graph-risks` reveals the Sales Research Agent's remaining access.
+For a fresh simulator, `make offboard` followed by the next scheduled observation
+and `make security-findings` reveals the Sales Research Agent's remaining access.
 `make revoke-agent` changes the grant in the CRM; the next graph sync observes
 the revocation and clears that finding. Graph edits do not enforce CRM access.
 
@@ -148,7 +147,8 @@ This is a single-company development backend. Company-key scoping is tested,
 but production tenant authorization, identity federation, dedicated service
 credentials for Neo4j, TLS, secret rotation and deployment isolation are future
 work. The local directory API is intentionally unauthenticated. There is no LLM,
-activity-stream ingestion, automatic remediation, or Slack workflow yet.
+automatic remediation, or Slack workflow yet. Activity capture and ingestion remain
+available separately as evidence; they do not produce new policy incidents.
 The local dashboard visualizes the observed graph and persisted findings.
 Scheduled metadata observation is implemented. The graph retains latest known
 state and first/last observation times; the platform additionally stores finding

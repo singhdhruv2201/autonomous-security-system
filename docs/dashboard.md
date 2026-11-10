@@ -24,8 +24,8 @@ service on the platform network, outside the simulated customer environment.
 
 Global search opens company entity details. **Refresh observations** queues a
 real security API job and follows its completion. The view fetches updates every
-15 seconds while visible; the backend observes company APIs every 60 seconds by
-default. Persistent findings are updated, not duplicated on every refresh.
+15 seconds while visible; the v1 local backend observes company APIs every 15
+seconds (the unset backend fallback is 60 seconds). Persistent findings are updated, not duplicated on every refresh.
 
 Company monitoring currently displays **observed metadata state** and genuine
 sync events. An employee's last-observed time is not the time they performed an

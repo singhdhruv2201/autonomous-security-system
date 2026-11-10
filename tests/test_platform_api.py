@@ -112,31 +112,32 @@ def test_dashboard_capabilities_and_policy_describe_actual_observation(api):
         "activity_ingestion": False, "remediation_enabled": False}
     response = client.get("/policies", headers=auth(settings, "viewer"))
     assert response.status_code == 200
+    assert "policy_runtime" not in overview
+    assert len(response.json()["items"]) == 1
     policy = response.json()["items"][0]
     assert policy["id"] == "inactive_owner_agent_access" and policy["enabled"] is True
     assert policy["sources"] == ["directory", "crm"]
     assert policy["severity"] == "high" and len(policy["conditions"]) == 4
 
 
-def test_policy_modes_require_fresh_authoritative_crm_configuration(api):
-    import time
-    client,settings,store,*_=api
-    items=client.get('/policies',headers=auth(settings)).json()['items']
-    assert next(p for p in items if p['id']=='sensitive_content')['enabled'] is False
-    store.set_runtime('helio','configuration',{'modes':{'sensitive_content':'enforce'}},time.time())
-    items=client.get('/policies',headers=auth(settings)).json()['items']
-    content=next(p for p in items if p['id']=='sensitive_content')
-    assert content['mode']=='enforce' and content['enabled']
-    store.set_runtime('helio','configuration',{'modes':{'sensitive_content':'enforce'}},time.time()-121)
-    items=client.get('/policies',headers=auth(settings)).json()['items']
-    assert next(p for p in items if p['id']=='sensitive_content')['coverage_status']=='unknown'
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_policy_coverage_comes_from_graph_not_retired_runtime(api, complete):
+    client, settings, store, graph, _ = api
+    store.set_runtime("helio", "configuration", {"modes": {"sensitive_content": "enforce"}}, 100)
+    store.set_runtime("helio", "identity_publisher", {"status": "unavailable"}, 100)
+    graph.status.return_value["coverage_complete"] = complete
+    result = client.get("/policies", headers=auth(settings)).json()
+    assert set(result) == {"company_id", "items"}
+    assert [p["id"] for p in result["items"]] == ["inactive_owner_agent_access"]
+    assert result["items"][0]["enabled"] is True
+    assert result["items"][0]["coverage_status"] == ("current" if complete else "unknown")
 
 
-def test_owner_policy_coverage_reflects_publisher_outage(api):
-    import time
-    client,settings,store,*_=api
-    store.set_runtime('helio','configuration',{'modes':{'owner_status':'enforce'}},time.time())
-    store.set_runtime('helio','identity_publisher',{'status':'unavailable'},time.time())
-    item=next(p for p in client.get('/policies',headers=auth(settings)).json()['items'] if p['id']=='owner_status')
-    assert item['enabled'] is True  # Enforcement remains fail-closed.
-    assert item['coverage_status']=='unknown'
+def test_overview_omits_retired_runtime_but_heartbeat_storage_survives(api):
+    client, settings, store, *_ = api
+    store.set_runtime("helio", "agent_worker", {"status": "ok"}, 100)
+    assert "policy_runtime" not in client.get("/overview", headers=auth(settings)).json()
+    store.initialize()
+    assert store.runtime("helio")["agent_worker"] == {"value": {"status": "ok"}, "updated_at": 100}
+    assert store.runtime("another-company") == {}

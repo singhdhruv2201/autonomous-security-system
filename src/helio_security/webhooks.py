@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, Union
 
-from fastapi import Query, Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
@@ -242,14 +242,6 @@ def create_app(path=None, keys=None, *, clock=time.time, read_tokens=None):
     @app.get('/activity')
     def list_activity(company=Depends(reader), query=Depends(activity_query)):
         return inbox.activity(company,**query)
-
-    @app.get('/activity/policy-events')
-    def policy_events(after: Annotated[int,Query(ge=0,le=2**53)]=0,
-                      limit: Annotated[int,Query(ge=1,le=200)]=100,company=Depends(reader)):
-        try:
-            return inbox.policy_events(company,after=after,limit=limit)
-        except ValueError:
-            raise HTTPException(409,'Policy cursor regressed') from None
 
     @app.get('/activity/health')
     def activity_health(company=Depends(reader)):
