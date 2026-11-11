@@ -251,8 +251,16 @@ class AgentWorker:
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
     db_path = Path(os.getenv("SECURITY_DB_PATH", "data/security.sqlite3"))
-    checkpoint_db = os.getenv("AWASI_CHECKPOINT_DB", "/data/checkpoints.sqlite3")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_db = os.getenv("AWASI_CHECKPOINT_DB", "data/checkpoints.sqlite3")
+    Path(checkpoint_db).parent.mkdir(parents=True, exist_ok=True)
     company_id = os.getenv("HELIO_COMPANY_ID", "helio")
     crm_url = os.getenv("CRM_URL", "http://crm:8001")
     action_token = os.getenv("CRM_ACTION_TOKEN", "")
@@ -310,7 +318,7 @@ def main():
             await actions.handle(ack, body)
 
         app_client = AsyncWebClient(token=slack_config.app_token, ssl=ssl_ctx)
-        slack_handler = AsyncSocketModeHandler(slack_app, slack_config.app_token, web_client=app_client)
+        slack_handler = AsyncSocketModeHandler(slack_app, slack_config.app_token, web_client=app_client, loop=loop)
     else:
         log.info("Slack is not configured; using LogNotifier")
         notifier = LogNotifier()
