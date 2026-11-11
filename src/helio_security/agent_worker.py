@@ -105,8 +105,30 @@ class AgentWorker:
         async with lock:
             try:
                 await self.graph.ainvoke(input_val, config)
-            except Exception as e:
-                log.exception("Error executing case %s: %s", case_id, e)
+            except Exception:
+                log.error("Error executing case %s; durable state retained for recovery", case_id)
+
+    async def _deliver_decision(self, case_id: str, decision: dict):
+        """At-least-once delivery; the checkpoint holds the durable receipt."""
+        config = {"configurable": {"thread_id": case_id}}
+        async with self._get_case_lock(case_id):
+            try:
+                snapshot = await self.graph.aget_state(config)
+                if decision["id"] not in snapshot.values.get("processed_decisions", []):
+                    if not snapshot.next:
+                        return
+                    # Resume a partly processed decision from its checkpoint,
+                    # never inject it into the next human question.
+                    in_progress = snapshot.values.get("human_input", {}).get("id") == decision["id"]
+                    value = None if in_progress or snapshot.next != ("wait_human",) else Command(resume={
+                        "id": decision["id"], "key": decision["key"],
+                        "choice": decision["choice"], "employee_id": decision["employee_id"]})
+                    await self.graph.ainvoke(value, config)
+                    snapshot = await self.graph.aget_state(config)
+                if decision["id"] in snapshot.values.get("processed_decisions", []):
+                    self.case_store.consume_decision(case_id, decision["key"])
+            except Exception:
+                log.error("Decision delivery interrupted for case %s; will recover", case_id)
 
     async def run_once(self, now: Optional[float] = None):
         now = self.clock() if now is None else now
@@ -141,7 +163,7 @@ class AgentWorker:
                     "exposure": "none",
                     "leaking_now": False,
                     "dependents": 0,
-                    "human_override": False,
+                    "human_override": self.case_store.has_human_override(self.company_id, fid),
                     "has_lead": True,
                     "addressed_to": "emp-hannah-reed",
                     "agent_id": evidence.get("agent_id", "agent:sales-research"),
@@ -150,37 +172,39 @@ class AgentWorker:
             }
             await self._safe_run_case(case_id, state, config)
 
-        # 2. Resume cases that have an unconsumed case_decisions row
-        cases_with_decisions = self.case_store.cases_with_pending_decisions(self.company_id)
-        for case in cases_with_decisions:
-            case_id = case["id"]
-            pending = self.case_store.unconsumed_decisions(case_id)
-            for dec in pending:
-                consumed = self.case_store.consume_decision(case_id, dec["key"])
-                if consumed:
-                    config = {"configurable": {"thread_id": case_id}}
-                    resume_cmd = Command(resume={"choice": dec["choice"], "employee_id": dec["employee_id"]})
-                    await self._safe_run_case(case_id, resume_cmd, config)
+        # 2. Acknowledge decisions only after the graph stores their receipts.
+        for case in self.case_store.cases_with_pending_decisions(self.company_id):
+            for decision in self.case_store.unconsumed_decisions(case["id"]):
+                await self._deliver_decision(case["id"], decision)
 
-        # 3. Resume waiting cases whose wait_until has passed with {"type": "timeout"}
-        overdue = self.case_store.overdue_waiting_cases(self.company_id, now=now)
-        for case in overdue:
-            case_id = case["id"]
-            # Clear wait_until so it doesn't fire repeatedly
-            self.case_store.set_wait_until(case_id, 0.0)
-            config = {"configurable": {"thread_id": case_id}}
-            resume_cmd = Command(resume={"choice": "timeout", "type": "timeout", "employee_id": "system"})
-            await self._safe_run_case(case_id, resume_cmd, config)
+        # 3. Timeouts use the same durable delivery path as human answers. The
+        # unique question key arbitrates a timeout racing a human response.
+        for case in self.case_store.overdue_waiting_cases(self.company_id, now=now):
+            config = {"configurable": {"thread_id": case["id"]}}
+            snapshot = await self.graph.aget_state(config)
+            question = snapshot.values.get("question", {})
+            if snapshot.next != ("wait_human",) or not question.get("key"):
+                continue
+            self.case_store.record_decision(case["id"], key=question["key"], choice="timeout",
+                employee_id="system", source="timeout", now=now)
+            for decision in self.case_store.unconsumed_decisions(case["id"]):
+                await self._deliver_decision(case["id"], decision)
 
-        # 4. Re-invoke cases left mid-node by a crash
-        active_cases = self.case_store.active_cases(self.company_id)
-        for case in active_cases:
-            if case["status"] in ("investigating", "fixing", "verifying"):
-                case_id = case["id"]
-                lock = self._get_case_lock(case_id)
-                if not lock.locked():
-                    config = {"configurable": {"thread_id": case_id}}
-                    await self._safe_run_case(case_id, None, config)
+        # 4. Recover every incomplete node, including notification failures that
+        # already changed the case status to waiting but never reached interrupt.
+        for case in self.case_store.active_cases(self.company_id):
+            config = {"configurable": {"thread_id": case["id"]}}
+            snapshot = await self.graph.aget_state(config)
+            interrupted = any(task.interrupts for task in snapshot.tasks)
+            if not snapshot.values:
+                finding = self.platform_store.finding(self.company_id, case["finding_id"])
+                if finding and finding.get("status") == "open" and finding.get("evidence_fresh"):
+                    await self._safe_run_case(case["id"], {"finding_id": case["finding_id"],
+                        "company_id": self.company_id}, config)
+                else:
+                    self.case_store.close_case(case["id"], status="needs_review", now=now)
+            elif snapshot.next and not interrupted:
+                await self._safe_run_case(case["id"], None, config)
 
         # 5. Write a heartbeat with platform_store.set_runtime
         self.platform_store.set_runtime(self.company_id, "agent_worker", {"status": "ok"}, now)

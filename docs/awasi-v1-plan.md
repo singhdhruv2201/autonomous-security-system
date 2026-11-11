@@ -523,13 +523,16 @@ Update after each phase with date, commit, and the test commands and counts actu
 - No required Phase 0 check remains unrun. Slack, model and case workflow checks are
   later-phase work and were not run.
 
-### Phase 1 verification — 2026-11-10
+### Phase 1 initial verification — 2026-11-10
+
+Historical happy-path results from the initial implementation. The review fixes and
+recovery checks below supersede its claims about decision completion and retry safety.
 
 - Baseline from Phase 0: `.venv/bin/python -m pytest -q` — **452 passed, 17 skipped**;
   `make test-ui` — **20 passed**.
 - Implementation:
   - `src/helio_security/decision.py`: pure decision function `decide(facts, confidence)`
-    implementing the 6 decision rules, low-confidence downgrade to `ask_lead`, and
+    implementing the 6 decision rules, low-confidence downgrade to `ask_approver`, and
     the `human_override` invariant.
   - `src/helio_security/cases.py`: SQLite `CaseStore` implementing `cases`,
     `case_events`, `case_actions`, `case_decisions`, with partial indexes, foreign
@@ -582,3 +585,52 @@ Update after each phase with date, commit, and the test commands and counts actu
   - Customer code (`helio_crm`, `helio_simulator`) never imports Awasi code (`helio_security`).
   - `CRM_ACTION_TOKEN` cannot read customer records (verified in `tests/test_crm_action_token.py`).
   - Redaction: timeline events and action logs contain no tokens or customer record values.
+
+
+### Phase 1 review fixes — 2026-11-10
+
+The backend review findings are implemented; Phase 2 Slack delivery is still not started.
+
+- **Durable actions.** `actions.py` commits the original state and dispatch marker
+  before sending a mutation. A restarted node reconciles a dispatched action by
+  reading the target; it never sends it again. Ambiguous outcomes become `unknown`
+  and the case becomes `needs_review`. Pending actions from the original schema
+  are conservatively marked unknown on replay because their dispatch history
+  cannot be reconstructed. Schema upgrades are additive and preserve demo data.
+- **Durable decisions.** The worker delivers the decision ID and question key to
+  the graph. A checkpointed receipt precedes acknowledgment in `case_decisions`.
+  Lost acknowledgments, interrupted processing, and durable timeouts recover
+  without injecting an old response into the next question. Recovery also handles
+  cases created before their first checkpoint and incomplete notification nodes.
+- **Truthful outcomes.** Only a successfully executed and verified action can
+  resolve the case. Rejection, invalid responses, timeout, and unavailable evidence
+  leave it needing review. Verification requires fresh post-dispatch observation
+  when graph polling is enabled, plus a final read of the target. Review cases do
+  not automatically create another action attempt for the same finding.
+- **Human transitions.** `retire` now asks Casey to approve `crm.revoke_grant`;
+  approval targets the grant ID, executes the action, and verifies it. The lead
+  cannot approve the CTO's question. For API use, send `lead_decision` with
+  `retire`, `keep`, or `undo`; the retirement follow-up uses key
+  `approve:crm.revoke_grant` with `approve` or `reject`. The current question key,
+  offered choices, and addressee are in notification event data returned by
+  `GET /cases/{id}`. The authenticated operator can answer for the addressed role.
+- **Undo.** Uses the configured CRM credentials, saved original state, and a
+  separate durable action linked through `undo_of`. Successful verification marks
+  the original action `undone`. A persistent finding override prevents subsequent
+  automatic containment; the next case asks the approver. Undo leaves the case
+  needing review because it restores access rather than resolving the finding.
+- **Regression coverage.** Added unit/checkpoint and real local HTTP/SQLite tests
+  for failures before and after decision delivery, lost acknowledgments, crash
+  after CRM commit, crash during Undo, timeout/503 reconciliation, unavailable
+  reconciliation reads, stale access versions, approval and rejection routing,
+  legacy pending actions, verification races, and the security API → worker → CRM
+  retirement flow. No Slack calls or model calls are involved.
+- **Validation after fixes:** `.venv/bin/python -m pytest -q` — **544 passed,
+  17 skipped**; `make test-integration` with Neo4j enabled — **561 passed,
+  0 skipped**. Thirty new regression/integration cases. `git diff --check` passed.
+  The initial regression run reproduced nine failures before implementation;
+  subsequent fault tests exposed additional reconciliation and upgrade edge cases
+  before their fixes. UI checks were not rerun because no UI code changed. The
+  live Docker offboarding demonstration and Slack walkthrough were not rerun;
+  real CRM HTTP tests used isolated temporary databases. Neo4j was started for
+  verification and stopped afterward, restoring the prior service state.

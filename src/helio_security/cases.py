@@ -44,6 +44,7 @@ class CaseStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
+            db.execute("BEGIN IMMEDIATE")
             for statement in [
                 # One non-closed case per finding is enforced by the unique partial index.
                 """CREATE TABLE IF NOT EXISTS cases (
@@ -89,7 +90,8 @@ class CaseStore:
                     dispatched_at REAL,
                     executed_at REAL,
                     verified_at REAL,
-                    undo_of TEXT REFERENCES case_actions(id)
+                    undo_of TEXT REFERENCES case_actions(id),
+                    dispatch_version INTEGER NOT NULL DEFAULT 2
                 )""",
                 # Human decisions. UNIQUE(case_id,key); consumed_at set when the
                 # worker reads and acts on the decision.
@@ -104,8 +106,18 @@ class CaseStore:
                     consumed_at REAL,
                     UNIQUE(case_id, key)
                 )""",
+                """CREATE TABLE IF NOT EXISTS finding_overrides (
+                    company_id TEXT NOT NULL,
+                    finding_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL REFERENCES cases(id),
+                    occurred_at REAL NOT NULL,
+                    PRIMARY KEY(company_id, finding_id)
+                )""",
             ]:
                 db.execute(statement)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(case_actions)")}
+            if "dispatch_version" not in columns:
+                db.execute("ALTER TABLE case_actions ADD COLUMN dispatch_version INTEGER NOT NULL DEFAULT 1")
 
     # ------------------------------------------------------------------
     # Cases
@@ -157,7 +169,7 @@ class CaseStore:
         assert status in {"resolved", "needs_review", "dismissed"}
         with self.connection() as db:
             db.execute(
-                "UPDATE cases SET status=?, closed_at=?, updated_at=? WHERE id=?",
+                "UPDATE cases SET status=?, closed_at=?, updated_at=?, wait_until=NULL WHERE id=?",
                 (status, now, now, case_id),
             )
 
@@ -194,7 +206,9 @@ class CaseStore:
                 r["finding_id"]
                 for r in db.execute(
                     f"SELECT finding_id FROM cases WHERE company_id=? AND finding_id IN ({placeholders}) "
-                    "AND status NOT IN ('resolved','needs_review','dismissed')",
+                    "AND (status NOT IN ('resolved','needs_review','dismissed') OR "
+                    "(status='needs_review' AND NOT EXISTS (SELECT 1 FROM finding_overrides o "
+                    "WHERE o.company_id=cases.company_id AND o.finding_id=cases.finding_id AND o.case_id=cases.id)))",
                     [company_id, *open_finding_ids],
                 )
             }
@@ -240,8 +254,8 @@ class CaseStore:
                 return existing["id"]
             action_id = str(uuid.uuid4())
             db.execute(
-                "INSERT INTO case_actions(id,case_id,playbook,target,idempotency_key,requested_by,created_at,undo_of) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO case_actions(id,case_id,playbook,target,idempotency_key,requested_by,created_at,undo_of,dispatch_version) "
+                "VALUES (?,?,?,?,?,?,?,?,2)",
                 (action_id, case_id, playbook, target, idempotency_key, requested_by, now, undo_of),
             )
             return action_id
@@ -331,17 +345,26 @@ class CaseStore:
             return [dict(r) for r in rows]
 
     def cases_with_pending_decisions(self, company_id: str) -> list[dict]:
-        """Return active cases that have an unconsumed decision row."""
+        """Include closed cases whose final decision still needs acknowledgment."""
         with self.connection() as db:
             rows = db.execute(
                 """SELECT DISTINCT c.* FROM cases c
                    JOIN case_decisions d ON d.case_id=c.id
                    WHERE c.company_id=? AND d.consumed_at IS NULL
-                   AND c.status NOT IN ('resolved','needs_review','dismissed')
                    ORDER BY c.created_at""",
                 (company_id,),
             )
             return [dict(r) for r in rows]
+
+    def set_human_override(self, case_id: str, *, now: float):
+        with self.connection() as db:
+            db.execute("INSERT OR IGNORE INTO finding_overrides(company_id,finding_id,case_id,occurred_at) "
+                       "SELECT company_id,finding_id,id,? FROM cases WHERE id=?", (now, case_id))
+
+    def has_human_override(self, company_id: str, finding_id: str) -> bool:
+        with self.connection() as db:
+            return db.execute("SELECT 1 FROM finding_overrides WHERE company_id=? AND finding_id=?",
+                              (company_id, finding_id)).fetchone() is not None
 
     # ------------------------------------------------------------------
     # API views

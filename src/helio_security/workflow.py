@@ -23,7 +23,8 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
 from .cases import CaseStore
-from .decision import Facts, Decision, decide
+from .decision import Facts, decide
+from .actions import call_playbook, dispatch
 
 
 class WorkflowState(TypedDict, total=False):
@@ -35,6 +36,10 @@ class WorkflowState(TypedDict, total=False):
     action_result: Dict[str, Any]
     human_input: Dict[str, Any]
     verified: bool
+    action_id: str
+    question: Dict[str, Any]
+    next_step: str
+    processed_decisions: list[str]
 
 
 @dataclass
@@ -105,6 +110,9 @@ def build_graph(deps: WorkflowDeps):
                 "addressed_to": "emp-hannah-reed",
             }
 
+        facts_dict = dict(facts_dict)
+        facts_dict["human_override"] = bool(facts_dict.get("human_override")) or deps.store.has_human_override(
+            state.get("company_id", deps.company_id), state["finding_id"])
         deps.store.add_event(
             case_id,
             key="gather",
@@ -178,88 +186,44 @@ def build_graph(deps: WorkflowDeps):
             return "notify_human"
         return "report"
 
+    def action_target(state):
+        facts = state.get("facts", {})
+        if state.get("decision", {}).get("playbook") == "crm.revoke_grant":
+            return facts.get("grant_id")
+        return facts.get("agent_id")
+
     async def execute_node(state: WorkflowState, config: RunnableConfig):
         case_id = _get_case_id(state, config)
-        now = deps.clock()
-        d = state.get("decision", {})
-        facts = state.get("facts", {})
-
-        playbook_id = d.get("playbook")
-        target = facts.get("agent_id") or "agent:sales-research"
-        idempotency_key = f"{case_id}:{playbook_id}:{target}"
-
-        # Check existing actions for idempotency
-        actions = deps.store.get_actions(case_id)
-        existing = next((a for a in actions if a["idempotency_key"] == idempotency_key), None)
-        if existing and existing.get("status") == "executed":
-            return {"action_result": existing.get("result", {})}
-
-        action_id = deps.store.record_action(
-            case_id,
-            playbook=playbook_id,
-            target=target,
-            idempotency_key=idempotency_key,
-            requested_by="awasi",
-            now=now,
-        )
-        deps.store.update_case_status(case_id, status="fixing", now=now)
-
-        pb = deps.playbooks.get(playbook_id)
-        result = {}
-        if pb and hasattr(pb, "run"):
-            sig = inspect.signature(pb.run)
-            kwargs: Dict[str, Any] = {}
-            if "before_state" in sig.parameters:
-                kwargs["before_state"] = None
-            if "crm_url" in sig.parameters and deps.crm_url:
-                kwargs["crm_url"] = deps.crm_url
-            if "action_token" in sig.parameters and deps.action_token:
-                kwargs["action_token"] = deps.action_token
-            if "observer_token" in sig.parameters and deps.observer_token:
-                kwargs["observer_token"] = deps.observer_token
-
-            if inspect.iscoroutinefunction(pb.run):
-                result = await pb.run(target, **kwargs)
-            else:
-                result = pb.run(target, **kwargs)
-
-            before = result.get("before") if isinstance(result, dict) else None
-            deps.store.update_action(action_id, status="executed", result=result, before=before, now=now)
-            deps.store.add_event(
-                case_id,
-                key=f"execute:{playbook_id}",
-                type="action",
-                actor="awasi",
-                text=f"Executed {playbook_id} on {target}",
-                now=now,
-            )
-        return {"action_result": result}
+        playbook_id = state.get("decision", {}).get("playbook")
+        target = action_target(state)
+        if not target or not playbook_id:
+            deps.store.close_case(case_id, status="needs_review", now=deps.clock())
+            return {"action_result": {"status": "failed"}, "verified": False}
+        deps.store.update_case_status(case_id, status="fixing", now=deps.clock())
+        action = await dispatch(deps, case_id, playbook_id, target,
+                                requested_by=state.get("human_input", {}).get("employee_id", "awasi"))
+        deps.store.add_event(case_id, key=f"execute:{action['id']}", type="action", actor="awasi",
+            text=f"Action {playbook_id} on {target}: {action['status']}", now=deps.clock())
+        if action["status"] != "executed":
+            deps.store.close_case(case_id, status="needs_review", now=deps.clock())
+        return {"action_id": action["id"], "action_result": {"status": action["status"]}, "verified": False}
 
     async def verify_node(state: WorkflowState, config: RunnableConfig):
         case_id = _get_case_id(state, config)
         now = deps.clock()
         d = state.get("decision", {})
-        facts = state.get("facts", {})
-
         playbook_id = d.get("playbook")
-        target = facts.get("agent_id") or "agent:sales-research"
+        target = action_target(state)
 
         deps.store.update_case_status(case_id, status="verifying", now=now)
 
         pb = deps.playbooks.get(playbook_id)
-        verified = True
-        if pb and hasattr(pb, "verify"):
-            sig = inspect.signature(pb.verify)
-            kwargs: Dict[str, Any] = {}
-            if "crm_url" in sig.parameters and deps.crm_url:
-                kwargs["crm_url"] = deps.crm_url
-            if "observer_token" in sig.parameters and deps.observer_token:
-                kwargs["observer_token"] = deps.observer_token
-
-            if inspect.iscoroutinefunction(pb.verify):
-                verified = await pb.verify(target, **kwargs)
-            else:
-                verified = pb.verify(target, **kwargs)
+        verified = False
+        try:
+            if pb and state.get("action_result", {}).get("status") == "executed":
+                verified = await call_playbook(pb.verify, target, deps)
+        except Exception:
+            verified = False
 
         if verified and deps.platform_store:
             try:
@@ -273,18 +237,27 @@ def build_graph(deps: WorkflowDeps):
                     start = deps.clock()
                     while deps.clock() - start < deps.verify_timeout_seconds:
                         f = deps.platform_store.finding(deps.company_id, finding_id)
-                        if f and f.get("status") == "resolved":
+                        if (f and f.get("status") == "resolved" and f.get("evidence_fresh")
+                                and f.get("last_verified", 0) >= deps.store.get_action(state["action_id"])["dispatched_at"]):
                             resolved = True
                             break
                         await asyncio.sleep(0.2)
                     if not resolved:
                         verified = False
 
+        if verified:
+            # The target may have changed while waiting for observation to catch
+            # up. Check it again before recording a verified outcome.
+            try:
+                verified = await call_playbook(pb.verify, target, deps)
+            except Exception:
+                verified = False
+
         if not verified:
             deps.store.close_case(case_id, status="needs_review", now=now)
             deps.store.add_event(
                 case_id,
-                key="verify",
+                key=f"verify:{state.get('action_id')}",
                 type="error",
                 actor="awasi",
                 text=f"Verification failed for {playbook_id}",
@@ -294,12 +267,13 @@ def build_graph(deps: WorkflowDeps):
 
         deps.store.add_event(
             case_id,
-            key="verify",
+            key=f"verify:{state.get('action_id')}",
             type="verification",
             actor="awasi",
             text=f"Verified {playbook_id} on {target}",
             now=now,
         )
+        deps.store.update_action(state["action_id"], status="executed", now=deps.clock(), verified_at=deps.clock())
         return {"verified": True}
 
     def route_after_verify(state: WorkflowState) -> str:
@@ -313,95 +287,96 @@ def build_graph(deps: WorkflowDeps):
 
     async def notify_human(state: WorkflowState, config: RunnableConfig):
         case_id = _get_case_id(state, config)
-        now = deps.clock()
         d = state.get("decision", {})
         facts = state.get("facts", {})
-
         followup = d.get("followup")
-        action = d.get("action")
         if followup == "ask_lead":
-            status = "waiting_approver"
-            addressed_to = facts.get("addressed_to", "emp-hannah-reed")
-        elif followup == "ask_approver" or action == "ask_approver":
-            status = "waiting_approver"
-            addressed_to = "emp-casey-wong"
+            role, addressed_to = "lead", facts.get("addressed_to", "emp-hannah-reed")
+            choices = ["retire", "keep", "undo"]
+            key = "lead_decision"
+        elif followup == "ask_approver" or d.get("action") == "ask_approver":
+            role, addressed_to = "approver", "emp-casey-wong"
+            choices = ["approve", "reject"]
+            key = "approve:" + str(d.get("playbook"))
         else:
-            status = "waiting_owner"
-            addressed_to = facts.get("addressed_to", "emp-maya-chen")
-
-        deadline = now + deps.owner_deadline_seconds
-        deps.store.update_case_status(
-            case_id,
-            status=status,
-            addressed_to=addressed_to,
-            wait_until=deadline,
-            now=now,
-        )
-        deps.store.add_event(
-            case_id,
-            key="notify_human",
-            type="notification",
-            actor="awasi",
-            text=f"Awaiting decision from {addressed_to}",
-            now=now,
-        )
-
+            role, addressed_to = "owner", facts.get("addressed_to")
+            choices = ["keep", "reject"]
+            key = "owner_decision"
+        question = {"key": key, "role": role, "choices": choices, "addressed_to": addressed_to}
+        # Preserve the first deadline on node replay, rather than extending it.
+        event = next((e for e in deps.store.get_events(case_id) if e["key"] == f"question:{key}"), None)
+        deadline = event["data"]["deadline"] if event else deps.clock() + deps.owner_deadline_seconds
+        deps.store.update_case_status(case_id, status="waiting_owner" if role == "owner" else "waiting_approver",
+            addressed_to=addressed_to, wait_until=deadline, now=deps.clock())
+        deps.store.add_event(case_id, key=f"question:{key}", type="notification", actor="awasi",
+            text=f"Awaiting decision from {addressed_to}", data={**question, "deadline": deadline}, now=deps.clock())
         if hasattr(deps.notifier, "notify"):
-            payload = {"addressed_to": addressed_to, "deadline": deadline, "decision": d}
-            if inspect.iscoroutinefunction(deps.notifier.notify):
-                await deps.notifier.notify(case_id, "question", payload)
-            else:
-                deps.notifier.notify(case_id, "question", payload)
-
-        return {"status": status}
+            payload = {**question, "deadline": deadline, "decision": d}
+            result = deps.notifier.notify(case_id, key, payload)
+            if inspect.isawaitable(result):
+                await result
+        return {"question": question}
 
     def wait_human(state: WorkflowState, config: RunnableConfig):
-        case_id = _get_case_id(state, config)
-        ans = interrupt({"case_id": case_id, "prompt": "decision_required"})
+        ans = interrupt({"case_id": _get_case_id(state, config), **state.get("question", {})})
         return {"human_input": ans}
 
     async def process_human_decision(state: WorkflowState, config: RunnableConfig):
         case_id = _get_case_id(state, config)
-        now = deps.clock()
-        human_input = state.get("human_input", {})
-        choice = human_input.get("choice", "retire")
-        employee_id = human_input.get("employee_id", "operator")
-
-        deps.store.add_event(
-            case_id,
-            key=f"human_decision:{choice}",
-            type="decision",
-            actor=employee_id,
-            text=f"Decision recorded: {choice} by {employee_id}",
-            now=now,
-        )
-
+        answer = state.get("human_input", {})
+        choice = answer.get("choice")
+        employee = answer.get("employee_id")
+        question = state.get("question", {})
+        processed = list(state.get("processed_decisions", []))
+        if answer.get("id") and answer["id"] not in processed:
+            processed.append(answer["id"])
+        update = {"processed_decisions": processed, "next_step": "report"}
+        deps.store.add_event(case_id, key=f"human_decision:{answer.get('id') or question.get('key')}:{choice}",
+            type="decision", actor=employee or "operator", text=f"Decision recorded: {choice} by {employee}", now=deps.clock())
+        authorized = employee in ("operator", question.get("addressed_to"))
+        valid_key = answer.get("key", question.get("key")) == question.get("key")
+        if not authorized or not valid_key or choice not in question.get("choices", []):
+            deps.store.close_case(case_id, status="needs_review", now=deps.clock())
+            return update
+        d = dict(state.get("decision", {}))
+        if choice == "retire" and question.get("role") == "lead":
+            d.update(action="ask_approver", playbook="crm.revoke_grant", followup=None)
+            return {**update, "decision": d, "next_step": "notify_human", "verified": False}
+        if choice == "approve" and question.get("role") == "approver" and d.get("playbook"):
+            d.update(action="fix", followup=None)
+            return {**update, "decision": d, "next_step": "execute", "verified": False}
         if choice == "undo":
-            d = state.get("decision", {})
-            playbook_id = d.get("playbook")
-            pb = deps.playbooks.get(playbook_id)
-            if pb and hasattr(pb, "undo"):
-                target = state.get("facts", {}).get("agent_id", "agent:sales-research")
-                actions = deps.store.get_actions(case_id)
-                action = next((a for a in actions if a["playbook"] == playbook_id), None)
-                before = action.get("before", {}) if action else {}
-                if inspect.iscoroutinefunction(pb.undo):
-                    await pb.undo(target, before=before)
-                else:
-                    pb.undo(target, before=before)
-            deps.store.close_case(case_id, status="resolved", now=now)
-        elif choice == "keep":
-            deps.store.close_case(case_id, status="needs_review", now=now)
-        else:
-            deps.store.close_case(case_id, status="resolved", now=now)
-        return {}
+            # Undo is itself a durable action. Set the override before dispatch so
+            # an uncertain outcome can never trigger automatic containment again.
+            actions = deps.store.get_actions(case_id)
+            original = next((a for a in actions if a["playbook"] == "crm.pause_principal"
+                             and not a["undo_of"] and a["status"] in ("executed", "undone")), None)
+            if original and original["before"]:
+                deps.store.set_human_override(case_id, now=deps.clock())
+                undo = await dispatch(deps, case_id, original["playbook"], original["target"],
+                                      requested_by=employee, undo_of=original)
+                try:
+                    ok = undo["status"] == "executed" and await call_playbook(
+                        deps.playbooks[original["playbook"]].verify, original["target"], deps,
+                        expected_state=original["before"]["principal_status"])
+                except Exception:
+                    ok = False
+                if ok:
+                    deps.store.update_action(undo["id"], status="executed", verified_at=deps.clock(), now=deps.clock())
+                    deps.store.update_action(original["id"], status="undone", now=deps.clock())
+                deps.store.add_event(case_id, key=f"undo:{original['id']}", type="action", actor=employee,
+                    text="Undo verified" if ok else "Undo requires review", now=deps.clock())
+        # Keep, reject, invalid answers, timeouts and undo leave the security
+        # question unresolved. Only execute -> verify can resolve a case.
+        deps.store.close_case(case_id, status="needs_review", now=deps.clock())
+        return update
 
     async def report(state: WorkflowState, config: RunnableConfig):
         case_id = _get_case_id(state, config)
         now = deps.clock()
         case = deps.store.get_case(case_id)
         if case and case["status"] not in ("resolved", "needs_review", "dismissed"):
-            deps.store.close_case(case_id, status="resolved", now=now)
+            deps.store.close_case(case_id, status="resolved" if state.get("verified") else "needs_review", now=now)
 
         deps.store.add_event(
             case_id,
@@ -431,7 +406,8 @@ def build_graph(deps: WorkflowDeps):
         route_decision,
         {"execute": "execute", "notify_human": "notify_human", "report": "report"},
     )
-    builder.add_edge("execute", "verify")
+    builder.add_conditional_edges("execute", lambda state: "verify" if state.get("action_result", {}).get("status") == "executed" else END,
+                                  {"verify": "verify", END: END})
     builder.add_conditional_edges(
         "verify",
         route_after_verify,
@@ -439,7 +415,8 @@ def build_graph(deps: WorkflowDeps):
     )
     builder.add_edge("notify_human", "wait_human")
     builder.add_edge("wait_human", "process_human_decision")
-    builder.add_edge("process_human_decision", "report")
+    builder.add_conditional_edges("process_human_decision", lambda state: state["next_step"],
+                                  {"report": "report", "execute": "execute", "notify_human": "notify_human"})
     builder.add_edge("report", END)
 
     # Unwrap checkpointer if it is a context manager

@@ -39,6 +39,8 @@ def make_facts(**overrides):
         human_override=False,
         has_lead=True,
         addressed_to="emp-hannah-reed",
+        agent_id="agent:sales-research",
+        grant_id="grant-sales-agent",
     )
     base.update(overrides)
     return base
@@ -61,6 +63,9 @@ class FakePlaybook:
         self.executed = []
         self.verified = []
         self.undone = []
+
+    async def read(self, target):
+        return {"principal_status": "active", "access_version": 1}
 
     async def run(self, target, before_state):
         if self.fail:

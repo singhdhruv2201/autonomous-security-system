@@ -30,6 +30,9 @@ class FakePlaybook:
     def __init__(self):
         self.executed = []
 
+    async def read(self, target):
+        return {"principal_status": "active", "access_version": 1}
+
     async def run(self, target, **kwargs):
         self.executed.append(target)
         return {"principal_status": "disabled"}
@@ -94,7 +97,7 @@ class TestAgentWorker:
             )
 
         # Run worker iteration
-        asyncio.get_event_loop().run_until_complete(worker.run_once())
+        asyncio.run(worker.run_once())
 
         # Verify case was opened and processed
         active = c_store.active_cases(COMPANY)
@@ -114,20 +117,21 @@ class TestAgentWorker:
             )
 
         # First run to reach waiting state
-        asyncio.get_event_loop().run_until_complete(worker.run_once())
+        asyncio.run(worker.run_once())
         case = c_store.active_cases(COMPANY)[0]
 
         # Record decision
-        c_store.record_decision(case["id"], key="decision-1", employee_id="emp-hannah-reed", source="slack", choice="retire", now=now)
+        c_store.record_decision(case["id"], key="lead_decision", employee_id="emp-hannah-reed", source="slack", choice="retire", now=now)
 
         # Second run should resume and resolve
-        asyncio.get_event_loop().run_until_complete(worker.run_once())
+        asyncio.run(worker.run_once())
         updated = c_store.get_case(case["id"])
-        assert updated["status"] == "resolved"
+        assert updated["status"] == "waiting_approver"
+        assert updated["addressed_to"] == "emp-casey-wong"
 
     def test_heartbeat_is_written(self, worker, stores):
         p_store, _ = stores
-        asyncio.get_event_loop().run_until_complete(worker.run_once())
+        asyncio.run(worker.run_once())
         rt = p_store.runtime(COMPANY)
         assert "agent_worker" in rt
         assert rt["agent_worker"]["value"]["status"] == "ok"
