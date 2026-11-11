@@ -248,3 +248,39 @@ class TestWorkflowResume:
         )
         case = deps2.store.get_case(case_id)
         assert case["status"] in ("resolved", "needs_review", "waiting_approver")
+
+    def test_failed_execution_and_verification_route_to_report_and_notify_outcome(self, tmp_path):
+        class NotificationCapture:
+            def __init__(self):
+                self.events = []
+
+            async def notify(self, case_id, event_type, payload):
+                self.events.append((case_id, event_type, payload))
+
+        # A) Failed execution routes to report, marks case needs_review, and notifies outcome
+        capture_a = NotificationCapture()
+        pb_fail = FakePlaybook(fail=True, verify_ok=False)
+        deps_a = make_deps(tmp_path / "a", playbook=pb_fail, notifier=capture_a)
+        graph_a = build_graph(deps_a)
+        case_a = deps_a.store.open_case(COMPANY, "finding-fail-exec", route="fix_then_ask", now=time.time())
+        config_a = {"configurable": {"thread_id": case_a}}
+        state_a = {"finding_id": "finding-fail-exec", "company_id": COMPANY, "facts": make_facts()}
+        asyncio.run(graph_a.ainvoke(state_a, config_a))
+        assert deps_a.store.get_case(case_a)["status"] == "needs_review"
+        outcome_events_a = [e for e in capture_a.events if e[1] == "outcome"]
+        assert len(outcome_events_a) == 1
+        assert outcome_events_a[0][2]["status"] == "needs_review"
+
+        # B) Failed verification routes to report, marks case needs_review, and notifies outcome
+        capture_b = NotificationCapture()
+        pb_unverified = FakePlaybook(verify_ok=False)
+        deps_b = make_deps(tmp_path / "b", playbook=pb_unverified, notifier=capture_b)
+        graph_b = build_graph(deps_b)
+        case_b = deps_b.store.open_case(COMPANY, "finding-fail-verify", route="fix_then_ask", now=time.time())
+        config_b = {"configurable": {"thread_id": case_b}}
+        state_b = {"finding_id": "finding-fail-verify", "company_id": COMPANY, "facts": make_facts()}
+        asyncio.run(graph_b.ainvoke(state_b, config_b))
+        assert deps_b.store.get_case(case_b)["status"] == "needs_review"
+        outcome_events_b = [e for e in capture_b.events if e[1] == "outcome"]
+        assert len(outcome_events_b) == 1
+        assert outcome_events_b[0][2]["status"] == "needs_review"

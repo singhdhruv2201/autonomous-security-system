@@ -24,6 +24,11 @@ try:
 except ImportError:
     pass
 
+try:
+    from slack_sdk.errors import SlackApiError
+except ImportError:
+    SlackApiError = None
+
 from .cases import CaseStore
 from .slack_store import SlackStore
 
@@ -119,10 +124,11 @@ class SlackNotifier:
         is_root = root_msg is None or root_msg.get("key") == key
 
         actions = self.cases.get_actions(case_id)
-        has_verified_pause = any(
-            a["playbook"] == "crm.pause_principal" and a["status"] in ("executed", "undone")
-            for a in actions
-        )
+        pause = next((a for a in reversed(actions)
+                      if a["playbook"] == "crm.pause_principal" and not a.get("undo_of")), None)
+        undo = next((a for a in reversed(actions) if pause and a.get("undo_of") == pause["id"]), None)
+        has_verified_pause = bool(pause and pause["status"] == "executed"
+                                  and pause.get("verified_at") is not None and not undo)
 
         decision = self.cases.decision(case_id, key)
 
@@ -130,34 +136,74 @@ class SlackNotifier:
             header_target = format_role(addressed_to)
             mention = f" <@{self.config.default_user}>" if is_root and self.config.default_user else ""
             header = f"To: {header_target}{mention}"
-
-            if has_verified_pause:
-                body_text = (
-                    f"{header}\n"
-                    f"Maya Chen left Helio today, but her Sales Research Agent could still read the customer "
-                    f"database ({record_count} customers). I paused its CRM access. "
-                    f"Nothing else depends on it. Checked: the CRM now reports the agent as disabled. "
-                    f"Does Sales still need it?"
-                )
+            if undo and undo["status"] == "executed" and undo.get("verified_at") is not None:
+                action_text = "The pause was undone. Restored CRM access was verified."
+            elif pause and pause["status"] == "undone":
+                action_text = "The pause was undone; current CRM access has not been verified."
+            elif undo:
+                action_text = "Undo was attempted; current CRM access has not been verified."
+            elif has_verified_pause:
+                action_text = "I paused its CRM access. Last verified CRM state: disabled."
             else:
-                body_text = (
-                    f"{header}\n"
-                    f"Maya Chen left Helio today, but her Sales Research Agent could still read the customer "
-                    f"database ({record_count} customers). Does Sales still need it?"
-                )
+                action_text = "A pause of CRM access has not been verified."
+            body_text = (
+                f"{header}\nMaya Chen's Sales Research Agent retained customer database access "
+                f"({record_count} customers) after its owner became inactive. {action_text} "
+                "Dependency impact has not been independently verified. Does Sales still need it?"
+            )
         elif key.startswith("approve:"):
             header_target = format_role(addressed_to)
             header = f"To: {header_target}"
-            body_text = (
-                f"{header}\n"
-                f"Hannah Reed requested to retire the Sales Research Agent. "
-                f"Please approve revoking its CRM grant on the customer database ({record_count} customers)."
-            )
+            target_playbook = key[len("approve:"):]
+            lead_dec = self.cases.decision(case_id, "lead_decision")
+            if lead_dec and lead_dec.get("choice") == "retire":
+                requester_name = format_name(lead_dec.get("employee_id", "emp-hannah-reed"))
+                requester_line = f"{requester_name} requested to retire the Sales Research Agent.\n"
+            else:
+                requester_line = ""
+
+            if "pause" in target_playbook:
+                action_desc = f"Please approve pause of Sales Research Agent CRM access on the customer database ({record_count} customers)."
+            elif "revoke" in target_playbook:
+                if requester_line:
+                    action_desc = f"Please approve revoking its CRM grant on the customer database ({record_count} customers)."
+                else:
+                    action_desc = f"Please approve revoking the Sales Research Agent CRM grant on the customer database ({record_count} customers)."
+            else:
+                action_desc = f"Please approve {target_playbook} for the Sales Research Agent ({record_count} customers)."
+
+            body_text = f"{header}\n{requester_line}{action_desc}"
         elif key == "outcome":
             case = self.cases.get_case(case_id)
             status = case.get("status") if case else "resolved"
-            if status == "resolved":
+            actions = self.cases.get_actions(case_id)
+
+            verified_undo = next((a for a in actions if a.get("undo_of") and a.get("status") == "executed" and a.get("verified_at")), None)
+            unverified_undo = next((a for a in actions if a.get("undo_of") and not (a.get("status") == "executed" and a.get("verified_at"))), None)
+
+            verified_revoke = next((a for a in actions if a.get("playbook") == "crm.revoke_grant" and a.get("status") == "executed" and a.get("verified_at")), None)
+            unverified_revoke = next((a for a in actions if a.get("playbook") == "crm.revoke_grant" and not (a.get("status") == "executed" and a.get("verified_at"))), None)
+
+            verified_pause = next((a for a in actions if a.get("playbook") == "crm.pause_principal" and a.get("status") == "executed" and a.get("verified_at")), None)
+            unverified_pause = next((a for a in actions if a.get("playbook") == "crm.pause_principal" and not (a.get("status") == "executed" and a.get("verified_at"))), None)
+
+            if verified_undo:
+                body_text = "Case requires review: Sales Research Agent CRM access restored (Undo verified)."
+            elif unverified_undo:
+                body_text = "Case requires review: Undo action could not be verified."
+            elif verified_revoke:
                 body_text = "Case resolved: Sales Research Agent CRM grant revoked."
+            elif unverified_revoke:
+                body_text = "Case requires review: Revocation could not be verified."
+            elif verified_pause:
+                if status == "resolved":
+                    body_text = "Case resolved: Sales Research Agent CRM access paused."
+                else:
+                    body_text = "Case requires review: Sales Research Agent CRM access remains paused."
+            elif unverified_pause:
+                body_text = "Case requires review: Pause action could not be verified."
+            elif status == "resolved":
+                body_text = "Case resolved."
             elif status == "needs_review":
                 body_text = "Case requires review: Action could not be verified or human override requested."
             else:
@@ -176,13 +222,23 @@ class SlackNotifier:
             blocks[0]["text"]["text"] = body_text
         elif key != "outcome" and payload.get("choices"):
             for choice in payload["choices"]:
-                label = {
-                    "retire": "Retire it",
-                    "keep": "Keep it, needs a new owner",
-                    "undo": "Undo pause",
-                    "approve": "Approve revocation",
-                    "reject": "Reject revocation",
-                }.get(choice, choice.title())
+                if key.startswith("approve:"):
+                    target_playbook = key[len("approve:"):]
+                    action_noun = "pause" if "pause" in target_playbook else "revocation"
+                    if choice == "approve":
+                        label = f"Approve {action_noun}"
+                    elif choice == "reject":
+                        label = f"Reject {action_noun}"
+                    else:
+                        label = choice.title()
+                else:
+                    label = {
+                        "retire": "Retire it",
+                        "keep": "Keep it, needs a new owner",
+                        "undo": "Undo pause",
+                        "approve": "Approve revocation",
+                        "reject": "Reject revocation",
+                    }.get(choice, choice.title())
                 btn_action_id = "awasi_undo" if choice == "undo" else "awasi_choice"
                 blocks.append({
                     "type": "actions",
@@ -223,8 +279,19 @@ class SlackNotifier:
                     await self.client.chat_update(channel=row["channel"], ts=row["ts"], **body)
                     self.slack_store.sent(row, row["ts"])
                 except Exception as err:
-                    log.warning("Slack chat_update failed for case %s: %s", row["case_id"], err)
-                    self.slack_store.failed(row, uncertain=False, retry_at=now + 5.0)
+                    status_code = getattr(getattr(err, "response", None), "status_code", None)
+                    if SlackApiError and isinstance(err, SlackApiError) and status_code == 429:
+                        headers = getattr(err.response, "headers", {}) or {}
+                        retry_after_hdr = headers.get("retry-after") or headers.get("Retry-After")
+                        try:
+                            retry_after = max(1.0, float(retry_after_hdr)) if retry_after_hdr is not None else 1.0
+                        except (ValueError, TypeError):
+                            retry_after = 1.0
+                        log.warning("Slack chat_update rate limited (429) for case %s; retrying after %.1fs", row["case_id"], retry_after)
+                        self.slack_store.failed(row, uncertain=False, retry_at=now + retry_after)
+                    else:
+                        log.warning("Slack chat_update failed for case %s: %s", row["case_id"], err.__class__.__name__)
+                        self.slack_store.failed(row, uncertain=False, retry_at=now + 5.0)
             else:
                 root = self.slack_store.root(row["case_id"])
                 thread_ts = root["ts"] if root and root.get("ts") and root["key"] != row["key"] else None
@@ -235,8 +302,19 @@ class SlackNotifier:
                     resp = await self.client.chat_postMessage(channel=row["channel"], **kwargs)
                     self.slack_store.sent(row, resp["ts"])
                 except Exception as err:
-                    log.warning("Slack chat_postMessage failed for case %s: %s", row["case_id"], err)
-                    self.slack_store.failed(row, uncertain=True, retry_at=0)
+                    status_code = getattr(getattr(err, "response", None), "status_code", None)
+                    if SlackApiError and isinstance(err, SlackApiError) and status_code == 429:
+                        headers = getattr(err.response, "headers", {}) or {}
+                        retry_after_hdr = headers.get("retry-after") or headers.get("Retry-After")
+                        try:
+                            retry_after = max(1.0, float(retry_after_hdr)) if retry_after_hdr is not None else 1.0
+                        except (ValueError, TypeError):
+                            retry_after = 1.0
+                        log.warning("Slack chat_postMessage rate limited (429) for case %s; retrying after %.1fs", row["case_id"], retry_after)
+                        self.slack_store.failed(row, uncertain=False, retry_at=now + retry_after)
+                    else:
+                        log.warning("Slack chat_postMessage failed for case %s: %s", row["case_id"], err.__class__.__name__)
+                        self.slack_store.failed(row, uncertain=True, retry_at=0)
 
 
 class SlackActions:
@@ -257,10 +335,9 @@ class SlackActions:
         self.wake = wake
 
     async def handle(self, ack: Any, body: dict):
-        if inspect.iscoroutinefunction(ack):
-            await ack()
-        else:
-            ack()
+        res = ack()
+        if inspect.isawaitable(res):
+            await res
 
         team = body.get("team", {}).get("id")
         channel = body.get("channel", {}).get("id")

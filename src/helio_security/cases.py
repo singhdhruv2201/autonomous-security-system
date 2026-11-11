@@ -120,6 +120,10 @@ class CaseStore:
                 )""",
             ]:
                 db.execute(statement)
+            case_columns = {row["name"] for row in db.execute("PRAGMA table_info(cases)")}
+            if "report_pending" not in case_columns:
+                # Existing closed cases get one checkpoint inspection on upgrade.
+                db.execute("ALTER TABLE cases ADD COLUMN report_pending INTEGER NOT NULL DEFAULT 1")
             columns = {row["name"] for row in db.execute("PRAGMA table_info(case_actions)")}
             if "dispatch_version" not in columns:
                 db.execute("ALTER TABLE case_actions ADD COLUMN dispatch_version INTEGER NOT NULL DEFAULT 1")
@@ -174,7 +178,7 @@ class CaseStore:
         assert status in {"resolved", "needs_review", "dismissed"}
         with self.connection() as db:
             db.execute(
-                "UPDATE cases SET status=?, closed_at=?, updated_at=?, wait_until=NULL WHERE id=?",
+                "UPDATE cases SET status=?, closed_at=?, updated_at=?, wait_until=NULL, report_pending=1 WHERE id=?",
                 (status, now, now, case_id),
             )
 
@@ -190,6 +194,20 @@ class CaseStore:
                 (company_id,),
             )
             return [dict(r) for r in rows]
+
+    def recovery_cases(self, company_id: str) -> list[dict]:
+        """Closed cases remain recoverable until their final checkpoint is complete."""
+        with self.connection() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM cases WHERE company_id=? AND "
+                "(status NOT IN ('resolved','needs_review','dismissed') OR report_pending=1) "
+                "ORDER BY created_at", (company_id,))]
+
+    def mark_reported(self, case_id: str):
+        """Reporting finished; this does not imply Slack delivered the outbox row."""
+        with self.connection() as db:
+            db.execute("UPDATE cases SET report_pending=0 WHERE id=? "
+                       "AND status IN ('resolved','needs_review','dismissed')", (case_id,))
 
     def overdue_waiting_cases(self, company_id: str, *, now: float) -> list[dict]:
         with self.connection() as db:

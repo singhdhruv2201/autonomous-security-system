@@ -673,3 +673,31 @@ The backend review findings are implemented; Phase 2 Slack delivery is still not
   - Integrated end-to-end workflow test (`test_real_workflow_driven_by_slack_actions`)
     exercised real CRM HTTP mutations driven by simulated Slack button clicks through
     lead triage (`retire`), CTO approval (`approve`), grant revocation, and final outcome delivery.
+
+### Phase 2 remaining review fixes — 2026-11-11
+
+- **Recover closed-case reports.** Cases retain a durable `report_pending` marker
+  until their final workflow checkpoint completes. The worker resumes unfinished
+  reporting even after the case closes. Existing databases upgrade additively;
+  completed historical cases are inspected once, and manually closed human waits
+  remain closed. Outbox idempotency prevents duplicate enqueueing after a crash.
+  Clearing the marker means reporting completed, not that Slack delivered it.
+- **Keep processing during Slack startup outages.** Socket Mode connection runs
+  alongside the worker, with retries for surfaced connection failures. Pending
+  connections do not gate case processing or heartbeats. Shutdown cancels the
+  connection task and closes the transport; health can recover from a startup
+  failure when connectivity returns.
+- **Render evidence accurately.** Lead messages distinguish verified pauses,
+  verified Undo, and unverified action attempts. Refreshing a message after Undo
+  no longer claims access remains disabled. Unsupported claims about offboarding
+  timing and verified dependency impact were removed.
+- **TDD and validation.** Seven focused failures reproduced the remaining issues
+  before implementation. Added 17 regression cases covering SQLite checkpoint
+  restart before/after outcome enqueueing, schema upgrades, finished-report
+  cleanup, manually closed waits, blocked startup, retries, cancellation,
+  unconfigured Slack, recovered connection health, and message refreshes.
+  The standard run passed **581 tests with 17 Neo4j skips**; after two final edge
+  tests were added, `make test-integration` passed **600 tests, 0 skipped**.
+  `git diff --check` and `docker compose config --quiet` passed. Live Slack
+  messages and the UI walkthrough were not rerun. Neo4j was started only for
+  verification and stopped afterward; demo volumes were preserved.

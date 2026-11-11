@@ -278,7 +278,7 @@ def build_graph(deps: WorkflowDeps):
 
     def route_after_verify(state: WorkflowState) -> str:
         if not state.get("verified", True):
-            return END
+            return "report"
         d = state.get("decision", {})
         followup = d.get("followup")
         if followup in ("ask_lead", "ask_approver", "tell_owner"):
@@ -412,12 +412,15 @@ def build_graph(deps: WorkflowDeps):
         route_decision,
         {"execute": "execute", "notify_human": "notify_human", "report": "report"},
     )
-    builder.add_conditional_edges("execute", lambda state: "verify" if state.get("action_result", {}).get("status") == "executed" else END,
-                                  {"verify": "verify", END: END})
+    builder.add_conditional_edges(
+        "execute",
+        lambda state: "verify" if state.get("action_result", {}).get("status") == "executed" else "report",
+        {"verify": "verify", "report": "report"},
+    )
     builder.add_conditional_edges(
         "verify",
         route_after_verify,
-        {"notify_human": "notify_human", "report": "report", END: END},
+        {"notify_human": "notify_human", "report": "report"},
     )
     builder.add_edge("notify_human", "wait_human")
     builder.add_edge("wait_human", "process_human_decision")

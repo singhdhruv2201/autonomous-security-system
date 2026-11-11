@@ -104,6 +104,9 @@ In Solo Operator Mode:
 - **CTO Follow-up**: If `Retire it` is chosen, a follow-up posts in the same thread addressed to Casey Wong asking to approve `crm.revoke_grant` with buttons `Approve revocation` and `Reject revocation`.
 - **Button Removal**: When a button is clicked and acknowledged, the message is updated in place, removing the buttons and appending `*Decision: {Choice} by {Name}*`.
 - **Replay Safety**: If a notification node re-runs, durable outbox checks prevent button resurrection.
+- **Verified State**: Lead messages describe the last verified pause, a verified Undo,
+  or explicitly unverified access. An attempted or undone pause is not presented as
+  proof that CRM access is currently disabled.
 
 ---
 
@@ -112,6 +115,13 @@ In Solo Operator Mode:
 - **Outbox Pattern**: Outgoing Slack messages are staged in the SQLite `slack_messages` table.
 - **Unknown Delivery Limitation**: If Slack's response to a new root message post is ambiguous (e.g. network timeout or connection reset before HTTP response), the message is marked with status `unknown` and is not blindly retried, avoiding duplicate channel notifications.
 - **Known-Message Updates**: Message updates (`chat_update`) with known timestamps are safely retried.
+- **Closed-Case Recovery**: Closing a case does not stop recovery of an unfinished
+  outcome report. The worker resumes its saved checkpoint after restart; the
+  existing outbox key prevents duplicate enqueueing. Reporting completion means
+  the notification was queued, not that Slack has delivered it.
+- **Startup Outages**: Socket Mode connects and retries alongside the case worker.
+  A pending connection does not block case processing or worker heartbeats. On
+  shutdown, the pending connection task is cancelled and the transport is closed.
 - **Monitoring**: `/overview` reports `slack.status`:
   - `not_configured`: Slack tokens are missing; fallback `LogNotifier` is in use.
   - `connected`: Active Socket Mode connection with fresh heartbeat (<60s).
@@ -125,6 +135,7 @@ In Solo Operator Mode:
 ### Automated Unit & Transport Tests
 Run tests with fake Slack clients:
 ```bash
-.venv/bin/python -m pytest -q tests/test_slack_app.py tests/test_platform_api.py
+.venv/bin/python -m pytest -q tests/test_slack_app.py tests/test_slack_recovery.py tests/test_platform_api.py
 ```
-This tests thread grouping, role mapping, authorization, idempotency, and button updates without network access.
+This tests thread grouping, role mapping, authorization, idempotency, button updates,
+SQLite checkpoint recovery, and startup outages without contacting Slack.

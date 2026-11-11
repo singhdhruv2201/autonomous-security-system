@@ -10,14 +10,14 @@ Loops every 2 seconds:
 
 import asyncio
 import fcntl
+import inspect
 import logging
 import os
 from pathlib import Path
 import signal
-import sys
 import threading
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -31,6 +31,49 @@ from .workflow import WorkflowDeps, build_graph
 log = logging.getLogger(__name__)
 
 
+class SlackTransport:
+    """Tracks Slack Socket Mode transport connection state and listener health."""
+
+    def __init__(self, handler: Optional[Any] = None, configured: bool = True):
+        self.handler = handler
+        self.configured = configured
+        self._startup_failed = False
+
+    def record_startup_failure(self, err: Exception):
+        self._startup_failed = True
+
+    def record_connected(self):
+        self._startup_failed = False
+
+    async def check_status(self) -> str:
+        if not self.configured:
+            return "not_configured"
+        disconnected = "connection_failed" if self._startup_failed else "disconnected"
+        if not self.handler:
+            return disconnected
+        try:
+            client = getattr(self.handler, "client", None)
+            if client and hasattr(client, "is_connected"):
+                is_conn = client.is_connected()
+                if inspect.isawaitable(is_conn):
+                    is_conn = await is_conn
+                if is_conn:
+                    self.record_connected()
+                    return "connected"
+                return disconnected
+            if hasattr(self.handler, "is_connected"):
+                is_conn = self.handler.is_connected()
+                if inspect.isawaitable(is_conn):
+                    is_conn = await is_conn
+                if is_conn:
+                    self.record_connected()
+                    return "connected"
+                return disconnected
+            return disconnected
+        except Exception:
+            return disconnected
+
+
 class AgentWorker:
     def __init__(
         self,
@@ -42,6 +85,7 @@ class AgentWorker:
         company_id: str = "helio",
         interval: float = 2.0,
         clock=time.time,
+        slack_transport: Optional[Any] = None,
     ):
         self.platform_store = platform_store
         self.case_store = case_store
@@ -50,6 +94,7 @@ class AgentWorker:
         self.interval = interval
         self.clock = clock
         self.graph = graph or build_graph(deps)
+        self.slack_transport = slack_transport
 
         self._case_locks: Dict[str, asyncio.Lock] = {}
         self._lock_file = None
@@ -203,10 +248,16 @@ class AgentWorker:
 
         # 4. Recover every incomplete node, including notification failures that
         # already changed the case status to waiting but never reached interrupt.
-        for case in self.case_store.active_cases(self.company_id):
+        for case in self.case_store.recovery_cases(self.company_id):
             config = {"configurable": {"thread_id": case["id"]}}
             snapshot = await self.graph.aget_state(config)
             interrupted = any(task.interrupts for task in snapshot.tasks)
+            closed = case["status"] in ("resolved", "needs_review", "dismissed")
+            if closed and (not snapshot.values or not snapshot.next or interrupted):
+                # Completed/legacy cases need no more polling. A deliberately
+                # closed human wait must not be reopened or answered on recovery.
+                self.case_store.mark_reported(case["id"])
+                continue
             if not snapshot.values:
                 finding = self.platform_store.finding(self.company_id, case["finding_id"])
                 if finding and finding.get("status") == "open" and finding.get("evidence_fresh"):
@@ -225,12 +276,20 @@ class AgentWorker:
                 log.warning("Notifier flush error: %s", e)
 
         self.platform_store.set_runtime(self.company_id, "agent_worker", {"status": "ok"}, now)
-        if hasattr(self.deps.notifier, "delivery_status"):
-            dstatus = self.deps.notifier.delivery_status()
+        dstatus = self.deps.notifier.delivery_status() if hasattr(self.deps.notifier, "delivery_status") else {}
+        if self.slack_transport:
+            slack_state = await self.slack_transport.check_status()
             self.platform_store.set_runtime(
                 self.company_id,
                 "slack",
-                {"status": "connected", "pending": dstatus.get("pending", 0), "unknown": dstatus.get("unknown", 0)},
+                {"status": slack_state, "pending": dstatus.get("pending", 0), "unknown": dstatus.get("unknown", 0)},
+                now,
+            )
+        elif hasattr(self.deps.notifier, "delivery_status"):
+            self.platform_store.set_runtime(
+                self.company_id,
+                "slack",
+                {"status": "disconnected", "pending": dstatus.get("pending", 0), "unknown": dstatus.get("unknown", 0)},
                 now,
             )
 
@@ -247,6 +306,37 @@ class AgentWorker:
                 pass
             finally:
                 wake_event.clear()
+
+
+async def run_worker(worker, slack_handler=None, slack_transport=None, *, retry_seconds=5.0):
+    """Socket Mode startup/retries must never gate the security worker."""
+    async def connect():
+        while True:
+            try:
+                await slack_handler.connect_async()
+                if slack_transport:
+                    slack_transport.record_connected()
+                log.info("Connected to Slack Socket Mode")
+                # The SDK monitors and reconnects established sockets itself.
+                return
+            except Exception as error:
+                if slack_transport:
+                    slack_transport.record_startup_failure(error)
+                log.warning("Slack connection attempt failed; retrying")
+                await asyncio.sleep(retry_seconds)
+
+    connection_task = asyncio.create_task(connect()) if slack_handler else None
+    try:
+        await worker.run_forever()
+    finally:
+        if connection_task:
+            connection_task.cancel()
+            await asyncio.gather(connection_task, return_exceptions=True)
+        if slack_handler:
+            try:
+                await slack_handler.close_async()
+            except Exception:
+                log.warning("Slack transport cleanup failed")
 
 
 def main():
@@ -278,6 +368,7 @@ def main():
 
     slack_config = SlackConfig.from_environment()
     slack_handler = None
+    slack_transport = None
 
     def scripted_investigator(fid: str, facts: dict):
         agent_id = facts.get("agent_id", "Sales Research Agent")
@@ -319,9 +410,11 @@ def main():
 
         app_client = AsyncWebClient(token=slack_config.app_token, ssl=ssl_ctx)
         slack_handler = AsyncSocketModeHandler(slack_app, slack_config.app_token, web_client=app_client, loop=loop)
+        slack_transport = SlackTransport(slack_handler, configured=True)
     else:
         log.info("Slack is not configured; using LogNotifier")
         notifier = LogNotifier()
+        slack_transport = SlackTransport(None, configured=False)
 
     deps = WorkflowDeps(
         store=case_store,
@@ -344,37 +437,22 @@ def main():
         deps=deps,
         company_id=company_id,
         interval=2.0,
+        slack_transport=slack_transport,
     )
 
     worker._acquire_lock()
 
     def shutdown(sig, frame):
         log.info("Shutting down agent worker...")
-        worker.stop()
-        sys.exit(0)
+        worker._stop_event.set()
+        worker.wake()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    async def runner():
-        if slack_handler:
-            try:
-                await slack_handler.connect_async()
-                log.info("Connected to Slack Socket Mode")
-            except Exception as e:
-                log.error("Failed to connect to Slack Socket Mode: %s", e)
-        try:
-            await worker.run_forever()
-        finally:
-            if slack_handler:
-                try:
-                    await slack_handler.close_async()
-                except Exception:
-                    pass
-
     log.info("Starting Awasi agent worker loop...")
     try:
-        loop.run_until_complete(runner())
+        loop.run_until_complete(run_worker(worker, slack_handler, slack_transport))
     finally:
         worker._release_lock()
 

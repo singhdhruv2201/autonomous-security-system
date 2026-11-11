@@ -149,3 +149,70 @@ class TestAgentWorker:
                 worker2.start()
         finally:
             worker.stop()
+
+    def test_slack_health_tracks_actual_transport_connection(self, stores):
+        p_store, c_store = stores
+        from helio_security.agent_worker import SlackTransport
+
+        class FakeClientSocket:
+            def __init__(self, connected=True):
+                self.connected = connected
+
+            async def is_connected(self):
+                return self.connected
+
+        class FakeHandler:
+            def __init__(self, connected=True):
+                self.client = FakeClientSocket(connected)
+
+        class FakeSlackNotifier:
+            def delivery_status(self):
+                return {"pending": 2, "unknown": 1}
+
+        # A) Missing transport / no Socket Mode connection established
+        notifier = FakeSlackNotifier()
+        deps = WorkflowDeps(
+            store=c_store,
+            checkpointer=MemorySaver(),
+            notifier=notifier,
+            investigator=lambda fid, facts: {},
+            playbooks={},
+            company_id=COMPANY,
+            clock=time.time,
+            platform_store=p_store,
+        )
+        worker = AgentWorker(platform_store=p_store, case_store=c_store, deps=deps, company_id=COMPANY)
+        asyncio.run(worker.run_once())
+        rt = p_store.runtime(COMPANY)["slack"]["value"]
+        assert rt["status"] == "disconnected"
+        assert rt["pending"] == 2
+        assert rt["unknown"] == 1
+
+        # B) Startup failure
+        handler = FakeHandler(connected=False)
+        transport = SlackTransport(handler, configured=True)
+        transport.record_startup_failure(RuntimeError("Invalid auth token"))
+        worker.slack_transport = transport
+        asyncio.run(worker.run_once())
+        rt = p_store.runtime(COMPANY)["slack"]["value"]
+        assert rt["status"] == "connection_failed"
+
+        # C) Disconnected listener
+        transport = SlackTransport(handler, configured=True)
+        worker.slack_transport = transport
+        asyncio.run(worker.run_once())
+        rt = p_store.runtime(COMPANY)["slack"]["value"]
+        assert rt["status"] == "disconnected"
+
+        # D) Connected / Reconnection
+        handler.client.connected = True
+        asyncio.run(worker.run_once())
+        rt = p_store.runtime(COMPANY)["slack"]["value"]
+        assert rt["status"] == "connected"
+
+        # E) Not configured
+        transport_nc = SlackTransport(None, configured=False)
+        worker.slack_transport = transport_nc
+        asyncio.run(worker.run_once())
+        rt = p_store.runtime(COMPANY)["slack"]["value"]
+        assert rt["status"] == "not_configured"

@@ -168,3 +168,204 @@ def test_missing_configuration_uses_log_notifier():
     config=SlackConfig.from_environment({})
     assert not config.configured
     assert 'xoxb-' not in repr(config)
+
+
+def test_handle_properly_awaits_bolt_async_ack(setup):
+    from slack_bolt.context.ack.async_ack import AsyncAck
+    store, cid, config, client, notifier, _ = setup
+    publish(setup)
+    handler = SlackActions(store, notifier, config, team_id="T123")
+
+    # 1. Accepted interaction
+    ack = AsyncAck()
+    asyncio.run(handler.handle(ack=ack, body=click(cid)))
+    assert ack.response is not None
+    assert ack.response.status == 200
+
+    # 2. Rejected interaction (unauthorized user)
+    ack_rejected = AsyncAck()
+    asyncio.run(handler.handle(ack=ack_rejected, body=click(cid, user="U_UNAUTHORIZED")))
+    assert ack_rejected.response is not None
+    assert ack_rejected.response.status == 200
+
+
+def test_approval_and_outcome_rendering_distinguishes_actions(setup):
+    store, cid, config, client, notifier, question = setup
+    now = time.time()
+
+    # A) Low-confidence pause approval (key: approve:crm.pause_principal)
+    pause_q = {
+        "key": "approve:crm.pause_principal",
+        "role": "approver",
+        "addressed_to": "emp-casey-wong",
+        "choices": ["approve", "reject"],
+        "facts": {"record_count": 6},
+    }
+    rendered = notifier.render_body(cid, pause_q["key"], pause_q)
+    assert "pause" in rendered["text"].lower()
+    assert "Hannah Reed" not in rendered["text"]
+    assert "retire" not in rendered["text"].lower()
+    assert "revok" not in rendered["text"].lower()
+    action_buttons = [
+        btn["text"]["text"]
+        for block in rendered["blocks"] if block.get("type") == "actions"
+        for btn in block.get("elements", [])
+    ]
+    assert "Approve pause" in action_buttons
+    assert "Reject pause" in action_buttons
+
+    # B) Retirement approval with Hannah's prior decision
+    store.record_decision(cid, key="lead_decision", employee_id="emp-hannah-reed", source="slack", choice="retire", now=now)
+    retire_q = {
+        "key": "approve:crm.revoke_grant",
+        "role": "approver",
+        "addressed_to": "emp-casey-wong",
+        "choices": ["approve", "reject"],
+        "facts": {"record_count": 6},
+    }
+    rendered_retire = notifier.render_body(cid, retire_q["key"], retire_q)
+    assert "Hannah Reed requested to retire" in rendered_retire["text"]
+    assert "revoking" in rendered_retire["text"].lower()
+    action_buttons_retire = [
+        btn["text"]["text"]
+        for block in rendered_retire["blocks"] if block.get("type") == "actions"
+        for btn in block.get("elements", [])
+    ]
+    assert "Approve revocation" in action_buttons_retire
+    assert "Reject revocation" in action_buttons_retire
+
+    # C) Retirement approval WITHOUT prior lead decision (cid2)
+    cid2 = store.open_case("helio", "finding-direct", route="investigating", now=now)
+    rendered_direct = notifier.render_body(cid2, retire_q["key"], retire_q)
+    assert "Hannah Reed" not in rendered_direct["text"]
+    assert "revoking" in rendered_direct["text"].lower()
+
+    # D) Outcome text: Undo executed and verified
+    act_pause_id = store.record_action(cid, playbook="crm.pause_principal", target="grant:1", requested_by="awasi", idempotency_key="act1", now=now)
+    store.update_action(act_pause_id, status="undone", now=now)
+    act_undo_id = store.record_action(cid, playbook="crm.pause_principal", target="grant:1", requested_by="emp-hannah-reed", idempotency_key="act2", now=now, undo_of=act_pause_id)
+    store.update_action(act_undo_id, status="executed", verified_at=now, now=now)
+    store.close_case(cid, status="needs_review", now=now)
+    rendered_undo = notifier.render_body(cid, "outcome", {})
+    assert "restored" in rendered_undo["text"].lower() or "undo" in rendered_undo["text"].lower()
+    assert "revoked" not in rendered_undo["text"].lower()
+
+    # E) Outcome text: Pause executed and verified (resolved case)
+    cid3 = store.open_case("helio", "finding-pause", route="investigating", now=now)
+    act3_id = store.record_action(cid3, playbook="crm.pause_principal", target="grant:3", requested_by="awasi", idempotency_key="act3", now=now)
+    store.update_action(act3_id, status="executed", verified_at=now, now=now)
+    store.close_case(cid3, status="resolved", now=now)
+    rendered_pause = notifier.render_body(cid3, "outcome", {})
+    assert "paused" in rendered_pause["text"].lower()
+    assert "revoked" not in rendered_pause["text"].lower()
+
+    # F) Outcome text: Action executed but NOT verified (verified_at is None)
+    cid4 = store.open_case("helio", "finding-unverified", route="investigating", now=now)
+    act4_id = store.record_action(cid4, playbook="crm.revoke_grant", target="grant:4", requested_by="awasi", idempotency_key="act4", now=now)
+    store.update_action(act4_id, status="executed", now=now)
+    store.close_case(cid4, status="needs_review", now=now)
+    rendered_unverified = notifier.render_body(cid4, "outcome", {})
+    assert "could not be verified" in rendered_unverified["text"].lower() or "unverified" in rendered_unverified["text"].lower()
+    assert "revoked" not in rendered_unverified["text"].lower()
+
+
+def test_flush_handles_rate_limiting_without_marking_unknown(setup):
+    from slack_sdk.errors import SlackApiError
+    from slack_sdk.web.async_slack_response import AsyncSlackResponse
+    store, cid, config, client, notifier, question = setup
+
+    # 1. 429 Rate limit on chat_postMessage
+    asyncio.run(notifier.notify(cid, question["key"], question))
+
+    resp_429 = AsyncSlackResponse(
+        client=None,
+        http_verb="POST",
+        api_url="https://slack.com/api/chat.postMessage",
+        req_args={},
+        headers={"retry-after": "3"},
+        status_code=429,
+        data={"ok": False, "error": "ratelimited"},
+    )
+
+    async def fail_429(**kwargs):
+        raise SlackApiError("ratelimited", resp_429)
+
+    client.chat_postMessage = fail_429
+
+    asyncio.run(notifier.flush())
+    # Must NOT be marked unknown!
+    status = notifier.delivery_status()
+    assert status["unknown"] == 0
+    assert status["pending"] == 1
+
+    with store.connection() as db:
+        msg = db.execute("SELECT * FROM slack_messages WHERE case_id=?", (cid,)).fetchone()
+        assert msg["status"] == "queued"
+        assert msg["retry_at"] > time.time()
+
+    # 2. Ambiguous network timeout on chat_postMessage (ts is None)
+    async def fail_timeout(**kwargs):
+        raise TimeoutError("connection dropped")
+
+    client.chat_postMessage = fail_timeout
+    with store.connection() as db:
+        db.execute("UPDATE slack_messages SET retry_at=0 WHERE case_id=?", (cid,))
+
+    asyncio.run(notifier.flush())
+    status = notifier.delivery_status()
+    assert status["unknown"] == 1
+    assert status["pending"] == 0
+
+
+@pytest.mark.parametrize('status,verified', [('executed', False), ('undone', True), ('executed', True)])
+def test_lead_copy_requires_a_current_verified_pause(setup, status, verified):
+    store, cid, _, _, notifier, question = setup
+    now = time.time()
+    aid = store.record_action(cid, playbook='crm.pause_principal', target='agent:sales-research',
+        idempotency_key='pause-copy', requested_by='awasi', now=now)
+    store.update_action(aid, status=status, now=now, verified_at=now if verified else None)
+    text = notifier.render_body(cid, 'lead_decision', question)['text'].lower()
+    if status == 'undone':
+        assert 'undone' in text
+        assert 'disabled' not in text
+    elif not verified:
+        assert 'not been verified' in text
+        assert 'disabled' not in text
+    else:
+        assert 'disabled' in text and 'verified' in text
+
+
+def test_refreshed_lead_message_does_not_describe_undo_as_current_pause(setup):
+    store, cid, _, client, notifier, question = setup
+    now = time.time()
+    original = store.record_action(cid, playbook='crm.pause_principal', target='agent:sales-research',
+        idempotency_key='pause-copy', requested_by='awasi', now=now)
+    store.update_action(original, status='executed', verified_at=now, now=now)
+    publish(setup)
+    undo = store.record_action(cid, playbook='crm.pause_principal', target='agent:sales-research',
+        idempotency_key='undo-copy', requested_by='emp-hannah-reed', undo_of=original, now=now+1)
+    store.update_action(undo, status='executed', verified_at=now+1, now=now+1)
+    store.update_action(original, status='undone', now=now+1)
+    store.record_decision(cid, key='lead_decision', choice='undo', employee_id='emp-hannah-reed', source='slack', now=now+1)
+    store.close_case(cid, status='needs_review', now=now+1)
+    asyncio.run(notifier.flush())
+    text = client.updates[-1]['text'].lower()
+    assert 'restored' in text
+    assert 'disabled' not in text
+    assert not any(block['type']=='actions' for block in client.updates[-1]['blocks'])
+
+
+@pytest.mark.parametrize('undo_status', ['pending', 'unknown', 'executed'])
+def test_unverified_undo_does_not_claim_access_is_disabled_or_restored(setup, undo_status):
+    store, cid, _, _, notifier, question = setup
+    now = time.time()
+    original = store.record_action(cid, playbook='crm.pause_principal', target='agent:sales-research',
+        idempotency_key='pause-copy', requested_by='awasi', now=now)
+    store.update_action(original, status='executed', verified_at=now, now=now)
+    undo = store.record_action(cid, playbook='crm.pause_principal', target='agent:sales-research',
+        idempotency_key='undo-copy', requested_by='emp-hannah-reed', undo_of=original, now=now+1)
+    store.update_action(undo, status=undo_status, now=now+1)
+    text = notifier.render_body(cid, 'lead_decision', question)['text'].lower()
+    assert 'current crm access has not been verified' in text
+    assert 'disabled' not in text
+    assert 'restored' not in text

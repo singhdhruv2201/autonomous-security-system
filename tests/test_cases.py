@@ -22,6 +22,32 @@ FINDING_ID = "finding-aaa"
 COMPANY = "helio"
 
 
+def test_legacy_closed_cases_remain_recoverable_until_reporting_finishes(store):
+    case_id = store.open_case(COMPANY, FINDING_ID, route="fix_then_ask", now=1.0)
+    store.close_case(case_id, status="needs_review", now=2.0)
+    # Recreate the previous schema without removing existing case records.
+    with store.connection() as db:
+        db.execute("ALTER TABLE cases DROP COLUMN report_pending")
+    upgraded = CaseStore(store.path)
+    upgraded.initialize()
+    upgraded.initialize()
+    assert [case['id'] for case in upgraded.recovery_cases(COMPANY)] == [case_id]
+    assert upgraded.recovery_cases('another-company') == []
+    upgraded.mark_reported(case_id)
+    assert upgraded.recovery_cases(COMPANY) == []
+    assert upgraded.get_case(case_id)['status'] == 'needs_review'
+
+
+def test_reporting_marker_cannot_hide_active_cases(store):
+    case_id = store.open_case(COMPANY, FINDING_ID, route="fix_then_ask", now=1.0)
+    store.mark_reported(case_id)
+    assert [case['id'] for case in store.recovery_cases(COMPANY)] == [case_id]
+    store.close_case(case_id, status="resolved", now=2.0)
+    assert [case['id'] for case in store.recovery_cases(COMPANY)] == [case_id]
+    store.mark_reported(case_id)
+    assert store.recovery_cases(COMPANY) == []
+
+
 class TestCaseCreation:
     def test_create_case_returns_id(self, store):
         case_id = store.open_case(COMPANY, FINDING_ID, route="fix_then_ask", now=1.0)
