@@ -479,7 +479,7 @@ Update after each phase with date, commit, and the test commands and counts actu
 
 - Phase 0, cut and reset: **complete — 2026-11-10**. Included in the `Complete Awasi v1 Phase 0 cleanup` commit, based on `f816639`; see Git history for its hash.
 - Phase 1, case loop on the orphaned agent: **complete — 2026-11-10**. See verification section below.
-- Phase 2, Slack: not started
+- Phase 2, Slack: **complete — 2026-11-10**. See verification section below.
 - Phase 3, model, MCP and tracing: not started
 - Phase 4, workbench and outside: not started
 - Phase 5, graph, rules and workbench playbooks: not started
@@ -634,3 +634,42 @@ The backend review findings are implemented; Phase 2 Slack delivery is still not
   live Docker offboarding demonstration and Slack walkthrough were not rerun;
   real CRM HTTP tests used isolated temporary databases. Neo4j was started for
   verification and stopped afterward, restoring the prior service state.
+
+### Phase 2 verification — 2026-11-10
+
+- Implementation:
+  - `src/helio_security/slack_store.py`: durable SQLite outbox for Slack notifications,
+    keyed by `(case_id, key)` with revision tracking, claim serialization, and failure
+    handling that preserves ambiguous post states as `unknown` to prevent double-posting.
+  - `src/helio_security/slack_app.py`:
+    - `SlackConfig` with sanitized token representations, environment loader, and
+      support for solo operator mode (`AWASI_SLACK_DEFAULT_USER`) and role mappings.
+    - `SlackNotifier` rendering safe incident copy with concrete counts, role-addressed
+      headers (`To: {Name} ({Title})`), and dynamic action button blocks (`awasi_choice`, `awasi_undo`).
+    - `SlackActions` handler enforcing immediate `ack()`, channel/team verification,
+      container timestamp validation, authorized user verification, atomic `submit_decision`,
+      worker wakeup, and in-place message refresh.
+    - `LogNotifier` fallback when Slack is not configured.
+  - `src/helio_security/cases.py`: `case_questions` table, atomic `offer_question`,
+    and `submit_decision` validating current question key, offered choices, and deadlines.
+  - `src/helio_security/api.py`: updated `/overview` to report Slack status (`not_configured`,
+    `connected`, `unavailable`) and delivery queue stats (`pending`, `unknown`); updated
+    `POST /cases/{id}/decisions` to use `submit_decision`.
+  - `src/helio_security/workflow.py`: bound question offering via `store.offer_question`
+    and added final outcome delivery into case threads.
+  - `src/helio_security/agent_worker.py`: wired Slack Socket Mode handler into daemon lifecycle
+    with prompt wakeup (`_wake_event`), outbox flushing, and heartbeat reporting.
+  - `docs/slack-setup.md`: comprehensive app setup guide, manifest, scopes, environment
+    variables, solo operator behavior, and troubleshooting.
+  - `compose.yaml`: forwarded Slack environment variables to `awasi-agent`.
+- Test counts:
+  - Standard test suite: `.venv/bin/python -m pytest -q` — **561 passed, 17 skipped**
+    (17 skips are Neo4j integration tests). 17 new tests across `tests/test_slack_app.py`,
+    `tests/test_platform_api.py`, and `tests/test_case_crm_integration.py`.
+  - UI suite: `make test-ui` — **20 passed**.
+  - `git diff --check` and `docker compose config --quiet` passed with 0 errors.
+- Verification details:
+  - Validated live Slack Bot and Socket Mode connectivity with configured workspace.
+  - Integrated end-to-end workflow test (`test_real_workflow_driven_by_slack_actions`)
+    exercised real CRM HTTP mutations driven by simulated Slack button clicks through
+    lead triage (`retire`), CTO approval (`approve`), grant revocation, and final outcome delivery.

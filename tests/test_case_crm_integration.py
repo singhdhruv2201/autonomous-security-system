@@ -120,6 +120,7 @@ def test_api_decisions_drive_worker_and_real_crm(environment, tmp_path):
     settings = Settings(operator_token=secrets.token_urlsafe(32), viewer_token=secrets.token_urlsafe(32),
                         observer_token=deps.observer_token, db_path=deps.store.path, sync_interval=0)
     platform = PlatformStore(deps.store.path)
+    platform.initialize()
     worker = AgentWorker(platform, deps.store, deps, graph=graph)
     with TestClient(security_app(settings, graph=Mock(company_id="helio"), reader=Mock(), store=platform, start_worker=False)) as client:
         headers = {"Authorization": "Bearer " + settings.operator_token}
@@ -182,3 +183,50 @@ def test_timeout_after_real_crm_commit_is_reconciled(environment, monkeypatch):
     assert fault["patches"] == 1
     assert deps.store.get_actions(cid)[0]["status"] == "executed"
     assert deps.store.get_actions(cid)[0]["verified_at"] is not None
+
+
+def test_real_workflow_driven_by_slack_actions(environment):
+    from unittest.mock import AsyncMock
+    from helio_security.agent_worker import AgentWorker
+    from helio_security.platform_store import PlatformStore
+    from helio_security.slack_app import SlackActions, SlackConfig, SlackNotifier
+    from test_slack_app import FakeClient, click
+
+    deps, graph, cid, cfg, state, fault = environment
+    config = SlackConfig(bot_token="xoxb-test", app_token="xapp-test", channel="C123", default_user="U123")
+    client = FakeClient()
+    notifier = SlackNotifier(deps.store, client, config)
+    deps.notifier = notifier
+    platform = PlatformStore(deps.store.path)
+    platform.initialize()
+    worker = AgentWorker(platform, deps.store, deps, graph=graph)
+    handler = SlackActions(deps.store, notifier, config, team_id="T123")
+
+    # 1. First run of graph executes pause and offers lead_decision question
+    asyncio.run(worker.graph.ainvoke(state, cfg))
+    asyncio.run(notifier.flush())
+    assert len(client.posts) == 1
+    root_ts = notifier.slack_store.message(cid, "lead_decision")["ts"]
+
+    # 2. Sales lead clicks "retire" in Slack
+    asyncio.run(handler.handle(ack=AsyncMock(), body=click(cid, choice="retire", ts=root_ts, key="lead_decision")))
+    # Worker consumes decision, transitions to ask Casey (CTO)
+    asyncio.run(worker.run_once())
+    asyncio.run(notifier.flush())
+    assert len(client.posts) == 2
+    followup_ts = notifier.slack_store.message(cid, "approve:crm.revoke_grant")["ts"]
+    assert client.posts[1]["thread_ts"] == root_ts
+    assert "To: Casey Wong (CTO)" in client.posts[1]["text"]
+
+    # 3. CTO clicks "approve" in Slack
+    asyncio.run(handler.handle(ack=AsyncMock(), body=click(cid, choice="approve", ts=followup_ts, key="approve:crm.revoke_grant")))
+    # Worker consumes approval, executes crm.revoke_grant against real CRM, verifies and reports
+    asyncio.run(worker.run_once())
+    asyncio.run(notifier.flush())
+
+    case = deps.store.get_case(cid)
+    assert case["status"] == "resolved"
+    actions = deps.store.get_actions(cid)
+    assert len(actions) == 2
+    assert actions[0]["playbook"] == "crm.pause_principal" and actions[0]["status"] == "executed"
+    assert actions[1]["playbook"] == "crm.revoke_grant" and actions[1]["status"] == "executed"

@@ -169,6 +169,13 @@ def test_cases_api_and_overview_heartbeat(api):
     assert "events" in detail.json()
     assert "actions" in detail.json()
 
+    # Offer question for case_id so decision is authorized
+    client.app.state.services.case_store.offer_question(
+        case_id,
+        {"key": "k1", "role": "lead", "choices": ["retire", "keep"], "addressed_to": "emp-hannah-reed", "deadline": time.time() + 900},
+        now=time.time(),
+    )
+
     # Viewer cannot post decision
     dec_resp = client.post(f"/cases/{case_id}/decisions", headers=auth(settings, "viewer"), json={"key": "k1", "choice": "retire"})
     assert dec_resp.status_code == 403
@@ -177,3 +184,28 @@ def test_cases_api_and_overview_heartbeat(api):
     dec_resp = client.post(f"/cases/{case_id}/decisions", headers=auth(settings, "operator"), json={"key": "k1", "choice": "retire"})
     assert dec_resp.status_code == 200
     assert dec_resp.json()["status"] == "recorded"
+
+
+def test_decision_api_refuses_unoffered_choices_and_closed_cases(api):
+    import time
+    client,settings,*_=api
+    store=client.app.state.services.case_store
+    cid=store.open_case('helio','f-guard',route='investigating',now=time.time())
+    path=f'/cases/{cid}/decisions'
+    assert client.post(path,headers=auth(settings),json={'key':'fake','choice':'approve'}).status_code==409
+    store.offer_question(cid, {'key':'lead_decision','role':'lead','choices':['retire','keep','undo'],
+        'addressed_to':'emp-hannah-reed','deadline':time.time()+900},now=time.time())
+    assert client.post(path,headers=auth(settings),json={'key':'lead_decision','choice':'approve'}).status_code==409
+    store.close_case(cid,status='needs_review',now=time.time())
+    assert client.post(path,headers=auth(settings),json={'key':'lead_decision','choice':'retire'}).status_code==409
+    assert store.unconsumed_decisions(cid)==[]
+
+
+def test_overview_reports_slack_configuration_and_delivery(api):
+    import time
+    client,settings,store,*_=api
+    assert client.get('/overview',headers=auth(settings)).json()['slack']['status']=='not_configured'
+    store.set_runtime('helio','slack',{'status':'connected','pending':1,'unknown':0},time.time())
+    assert client.get('/overview',headers=auth(settings)).json()['slack']['status']=='connected'
+    store.set_runtime('helio','slack',{'status':'connected'},time.time()-100)
+    assert client.get('/overview',headers=auth(settings)).json()['slack']['status']=='unavailable'

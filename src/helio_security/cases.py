@@ -106,6 +106,11 @@ class CaseStore:
                     consumed_at REAL,
                     UNIQUE(case_id, key)
                 )""",
+                """CREATE TABLE IF NOT EXISTS case_questions (
+                    case_id TEXT PRIMARY KEY REFERENCES cases(id),
+                    key TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                )""",
                 """CREATE TABLE IF NOT EXISTS finding_overrides (
                     company_id TEXT NOT NULL,
                     finding_id TEXT NOT NULL,
@@ -309,6 +314,57 @@ class CaseStore:
     # Decisions
     # ------------------------------------------------------------------
 
+    def offer_question(self, case_id: str, question: dict, *, now: float):
+        payload = {k: question[k] for k in ("key", "role", "choices", "addressed_to", "deadline")}
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            # A replay cannot resurrect a question that already has an answer.
+            if db.execute("SELECT 1 FROM case_decisions WHERE case_id=? AND key=?",
+                          (case_id, question["key"])).fetchone():
+                return
+            db.execute("INSERT INTO case_questions VALUES (?,?,?) ON CONFLICT(case_id) DO UPDATE "
+                       "SET key=excluded.key,payload=excluded.payload", (case_id, question["key"], json.dumps(payload)))
+            db.execute("UPDATE cases SET status=?,addressed_to=?,wait_until=?,updated_at=? WHERE id=?",
+                       ("waiting_owner" if question["role"] == "owner" else "waiting_approver",
+                        question["addressed_to"], question["deadline"], now, case_id))
+
+    def question(self, case_id: str) -> dict | None:
+        with self.connection() as db:
+            row = db.execute("SELECT payload FROM case_questions WHERE case_id=?", (case_id,)).fetchone()
+            return json.loads(row["payload"]) if row else None
+
+    def decision(self, case_id: str, key: str) -> dict | None:
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM case_decisions WHERE case_id=? AND key=?", (case_id, key)).fetchone()
+            return dict(row) if row else None
+
+    def submit_decision(self, company_id: str, case_id: str, *, key: str, choice: str,
+                        employee_id: str, source: str, now: float, actor_id: str | None = None) -> bool:
+        """Atomically authorize a human answer against the currently offered question."""
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            case = db.execute("SELECT * FROM cases WHERE id=? AND company_id=?", (case_id, company_id)).fetchone()
+            row = db.execute("SELECT payload FROM case_questions WHERE case_id=?", (case_id,)).fetchone()
+            if not case or not row or case["status"] not in ("waiting_owner", "waiting_approver"):
+                raise ValueError("This case is not waiting for a decision")
+            question = json.loads(row["payload"])
+            if (key != question["key"] or choice not in question["choices"]
+                    or employee_id not in ("operator", question["addressed_to"])):
+                raise ValueError("This decision is not offered to you")
+            existing = db.execute("SELECT * FROM case_decisions WHERE case_id=? AND key=?", (case_id, key)).fetchone()
+            if existing:
+                if existing["choice"] == choice and existing["employee_id"] == employee_id:
+                    return False
+                raise ValueError("This question already has a decision")
+            if question["deadline"] is not None and now >= question["deadline"]:
+                raise ValueError("This question has expired")
+            db.execute("INSERT INTO case_decisions(id,case_id,key,employee_id,source,choice,occurred_at) VALUES (?,?,?,?,?,?,?)",
+                       (str(uuid.uuid4()), case_id, key, employee_id, source, choice, now))
+            db.execute("INSERT INTO case_events(case_id,key,type,actor,text,data,occurred_at) VALUES (?,?,?,?,?,?,?)",
+                       (case_id, f"received:{key}", "decision_received", employee_id, "Human decision received",
+                        json.dumps({"source": source, "actor_id": actor_id, "choice": choice}), now))
+            return True
+
     def record_decision(self, case_id: str, *, key: str, employee_id: str,
                         source: str, choice: str, now: float):
         """Record a human decision; idempotent by (case_id, key)."""
@@ -376,6 +432,7 @@ class CaseStore:
             return None
         case["events"] = self.get_events(case_id)
         case["actions"] = self.get_actions(case_id)
+        case["question"] = self.question(case_id)
         return case
 
     def list_cases(self, company_id: str, *, limit: int = 50, offset: int = 0) -> dict:

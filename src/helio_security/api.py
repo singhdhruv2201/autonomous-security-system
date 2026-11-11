@@ -130,9 +130,19 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
         runtime = service.store.runtime(company)
         heartbeat = runtime.get("agent_worker")
         agent_active = bool(heartbeat and 0 <= time.time() - heartbeat.get("updated_at", 0) <= 60)
+        slack_rt = runtime.get("slack")
+        if not slack_rt:
+            slack_status = {"status": "not_configured"}
+        else:
+            val = slack_rt.get("value", {})
+            if 0 <= time.time() - slack_rt.get("updated_at", 0) <= 60:
+                slack_status = {**val, "status": val.get("status", "connected")}
+            else:
+                slack_status = {**val, "status": "unavailable"}
         return {**service.graph.status(),
                 "observation": {"interval_seconds": service.settings.sync_interval, "agentic": agent_active,
                                 "activity_ingestion": app.state.activity_client is not None, "remediation_enabled": agent_active},
+                "slack": slack_status,
                 "finding_counts": {state: service.store.findings(company, status=state, limit=1)["total"]
                                    for state in ("open", "resolved")},
                 "latest_sync_run": next(iter(service.store.runs(company, limit=1)["items"]), None)}
@@ -153,14 +163,18 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
         item = service.case_store.get_case(case_id)
         if item is None or item["company_id"] != identity["company_id"]:
             raise HTTPException(404, "Case not found")
-        service.case_store.record_decision(
-            case_id,
-            key=body.key,
-            employee_id="operator",
-            source="api",
-            choice=body.choice,
-            now=time.time(),
-        )
+        try:
+            service.case_store.submit_decision(
+                identity["company_id"],
+                case_id,
+                key=body.key,
+                choice=body.choice,
+                employee_id="operator",
+                source="api",
+                now=time.time(),
+            )
+        except ValueError as err:
+            raise HTTPException(409, str(err))
         return {"status": "recorded", "case_id": case_id, "key": body.key, "choice": body.choice}
 
     @app.get("/policies", tags=["Observation"])

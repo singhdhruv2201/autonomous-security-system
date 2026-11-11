@@ -306,16 +306,16 @@ def build_graph(deps: WorkflowDeps):
         # Preserve the first deadline on node replay, rather than extending it.
         event = next((e for e in deps.store.get_events(case_id) if e["key"] == f"question:{key}"), None)
         deadline = event["data"]["deadline"] if event else deps.clock() + deps.owner_deadline_seconds
-        deps.store.update_case_status(case_id, status="waiting_owner" if role == "owner" else "waiting_approver",
-            addressed_to=addressed_to, wait_until=deadline, now=deps.clock())
+        question_payload = {**question, "deadline": deadline, "facts": facts}
+        deps.store.offer_question(case_id, question_payload, now=deps.clock())
         deps.store.add_event(case_id, key=f"question:{key}", type="notification", actor="awasi",
             text=f"Awaiting decision from {addressed_to}", data={**question, "deadline": deadline}, now=deps.clock())
         if hasattr(deps.notifier, "notify"):
-            payload = {**question, "deadline": deadline, "decision": d}
+            payload = {**question_payload, "decision": d}
             result = deps.notifier.notify(case_id, key, payload)
             if inspect.isawaitable(result):
                 await result
-        return {"question": question}
+        return {"question": question_payload}
 
     def wait_human(state: WorkflowState, config: RunnableConfig):
         ans = interrupt({"case_id": _get_case_id(state, config), **state.get("question", {})})
@@ -386,6 +386,12 @@ def build_graph(deps: WorkflowDeps):
             text="Case workflow finished",
             now=now,
         )
+        if hasattr(deps.notifier, "notify"):
+            final_case = deps.store.get_case(case_id)
+            payload = {"status": final_case["status"] if final_case else "resolved", "decision": state.get("decision", {})}
+            result = deps.notifier.notify(case_id, "outcome", payload)
+            if inspect.isawaitable(result):
+                await result
         return {}
 
     builder.add_node("gather", gather)

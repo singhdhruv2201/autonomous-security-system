@@ -25,6 +25,7 @@ from langgraph.types import Command
 from .cases import CaseStore
 from .platform_store import PlatformStore
 from .playbooks import REGISTRY
+from .slack_app import LogNotifier, SlackConfig
 from .workflow import WorkflowDeps, build_graph
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,16 @@ class AgentWorker:
         self._lock_file = None
         self._stop_event = threading.Event()
         self._thread = None
+        self._wake_event = None
+
+    def _get_wake_event(self) -> asyncio.Event:
+        if self._wake_event is None:
+            self._wake_event = asyncio.Event()
+        return self._wake_event
+
+    def wake(self):
+        if self._wake_event is not None:
+            self._wake_event.set()
 
     def _get_case_lock(self, case_id: str) -> asyncio.Lock:
         if case_id not in self._case_locks:
@@ -206,16 +217,36 @@ class AgentWorker:
             elif snapshot.next and not interrupted:
                 await self._safe_run_case(case["id"], None, config)
 
-        # 5. Write a heartbeat with platform_store.set_runtime
+        # 5. Flush outbox and write heartbeats
+        if hasattr(self.deps.notifier, "flush"):
+            try:
+                await self.deps.notifier.flush()
+            except Exception as e:
+                log.warning("Notifier flush error: %s", e)
+
         self.platform_store.set_runtime(self.company_id, "agent_worker", {"status": "ok"}, now)
+        if hasattr(self.deps.notifier, "delivery_status"):
+            dstatus = self.deps.notifier.delivery_status()
+            self.platform_store.set_runtime(
+                self.company_id,
+                "slack",
+                {"status": "connected", "pending": dstatus.get("pending", 0), "unknown": dstatus.get("unknown", 0)},
+                now,
+            )
 
     async def run_forever(self):
+        wake_event = self._get_wake_event()
         while not self._stop_event.is_set():
             try:
                 await self.run_once()
             except Exception as e:
                 log.exception("Error in agent worker cycle: %s", e)
-            await asyncio.sleep(self.interval)
+            try:
+                await asyncio.wait_for(wake_event.wait(), timeout=self.interval)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                wake_event.clear()
 
 
 def main():
@@ -237,9 +268,8 @@ def main():
 
     checkpointer = SqliteSaver.from_conn_string(checkpoint_db)
 
-    class StdoutNotifier:
-        async def notify(self, case_id: str, event_type: str, payload: dict):
-            log.info("CASE %s [%s]: %s", case_id, event_type, payload)
+    slack_config = SlackConfig.from_environment()
+    slack_handler = None
 
     def scripted_investigator(fid: str, facts: dict):
         agent_id = facts.get("agent_id", "Sales Research Agent")
@@ -249,10 +279,46 @@ def main():
             "source": "scripted",
         }
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    worker = None
+    if slack_config.configured:
+        log.info("Configuring Slack integration for channel %s", slack_config.channel)
+        from slack_bolt.async_app import AsyncApp
+        from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+        from slack_sdk.web.async_client import AsyncWebClient
+        from .slack_app import SlackActions, SlackNotifier, get_ssl_context
+
+        ssl_ctx = get_ssl_context()
+        bot_client = AsyncWebClient(token=slack_config.bot_token, ssl=ssl_ctx)
+        slack_app = AsyncApp(client=bot_client)
+        notifier = SlackNotifier(case_store, bot_client, slack_config)
+        actions = SlackActions(
+            case_store,
+            notifier,
+            slack_config,
+            wake=lambda: loop.call_soon_threadsafe(worker.wake if worker else None),
+        )
+
+        @slack_app.action("awasi_choice")
+        async def handle_choice(ack, body):
+            await actions.handle(ack, body)
+
+        @slack_app.action("awasi_undo")
+        async def handle_undo(ack, body):
+            await actions.handle(ack, body)
+
+        app_client = AsyncWebClient(token=slack_config.app_token, ssl=ssl_ctx)
+        slack_handler = AsyncSocketModeHandler(slack_app, slack_config.app_token, web_client=app_client)
+    else:
+        log.info("Slack is not configured; using LogNotifier")
+        notifier = LogNotifier()
+
     deps = WorkflowDeps(
         store=case_store,
         checkpointer=checkpointer,
-        notifier=StdoutNotifier(),
+        notifier=notifier,
         investigator=scripted_investigator,
         playbooks=REGISTRY,
         company_id=company_id,
@@ -274,9 +340,6 @@ def main():
 
     worker._acquire_lock()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     def shutdown(sig, frame):
         log.info("Shutting down agent worker...")
         worker.stop()
@@ -285,9 +348,25 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    async def runner():
+        if slack_handler:
+            try:
+                await slack_handler.connect_async()
+                log.info("Connected to Slack Socket Mode")
+            except Exception as e:
+                log.error("Failed to connect to Slack Socket Mode: %s", e)
+        try:
+            await worker.run_forever()
+        finally:
+            if slack_handler:
+                try:
+                    await slack_handler.close_async()
+                except Exception:
+                    pass
+
     log.info("Starting Awasi agent worker loop...")
     try:
-        loop.run_until_complete(worker.run_forever())
+        loop.run_until_complete(runner())
     finally:
         worker._release_lock()
 
