@@ -9,13 +9,17 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Set
 import uuid
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelResponse
+from langchain.agents.structured_output import ToolStrategy
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .cases import CaseStore
+from .notification_copy import SlackMessage, clean_message
 from .decision import _RULE_PLAYBOOKS
 from .tracing import CaseTracer, sanitize_error
 from .redaction import scrub_text, safe_identifier
@@ -80,6 +84,13 @@ class Assessment(BaseModel):
     question_for_owner: Optional[Annotated[str, Field(max_length=200, description="Optional brief question for the asset owner.")]] = None
     evidence_refs: List[Annotated[str, Field(max_length=2048)]] = Field(default_factory=list, max_length=32, description="IDs of entities or records explicitly referenced.")
     recommended_playbook: Optional[str] = Field(default=None, description="Optional advisory playbook recommendation.")
+    slack_message: Optional[SlackMessage] = Field(default=None, description="Write a brief, case-specific Slack explanation using the available evidence.")
+
+
+    @field_validator('slack_message', mode='before')
+    @classmethod
+    def valid_optional_copy(cls, value):
+        return clean_message(value)
 
 
 def extract_evidence_ids(data: Any) -> Set[str]:
@@ -129,7 +140,7 @@ def validate_and_sanitize_assessment(
     if isinstance(raw, Assessment):
         model_inst = raw
     elif isinstance(raw, dict):
-        model_inst = Assessment(**raw)
+        model_inst = Assessment(**{**raw, "slack_message": clean_message(raw.get("slack_message"))})
     else:
         raise ValueError(f"Expected Assessment or dict, got {type(raw)}")
 
@@ -162,6 +173,7 @@ def validate_and_sanitize_assessment(
         "question_for_owner": scrub_text(model_inst.question_for_owner)[:200] if model_inst.question_for_owner else None,
         "evidence_refs": filtered_refs,
         "recommended_playbook": recommended_pb,
+        "slack_message": clean_message(model_inst.slack_message) if raw_refs and len(filtered_refs) == len(raw_refs) else None,
     }
 
 
@@ -218,7 +230,22 @@ Rules:
    Do not infer compromise without supporting evidence. Controls without a violation use unknown.
 9. recommended_playbook is advisory: use an exact known playbook ID or null, never prose.
    For evidence without a security violation, use null and do not ask unnecessary owner questions.
+10. For a security finding, also write slack_message for the person receiving the alert.
+    Its structure is headline, context (what happened), and impact (why it matters).
+    Be a thoughtful colleague: use natural, case-specific wording, friendly asset/person names,
+    and the detail that helps this person understand the situation. You need not reuse phrases
+    or fill every sentence with numbers. Explain uncertainty when it changes the meaning.
+    Write plain text, not Markdown. Keep technical IDs, rule names, confidence scores,
+    raw HTTP errors, and tool diagnostics in the investigation summary.
+    Describe observed facts before remediation, not a story about malicious intent.
+    Do not announce that Awasi took an action, approved anything or resolved the case.
+    The application supplies verified action status, the decision question, and buttons separately.
+    For evidence without a security finding, slack_message may be null.
 """
+
+
+class ModelRequestLimitError(RuntimeError):
+    """The bounded investigation has exhausted its model allowance."""
 
 
 class ModelLimiter:
@@ -232,12 +259,12 @@ class ModelLimiter:
     async def acquire_async(self):
         async with self.lock:
             if self.count >= self.max_calls:
-                raise RuntimeError(f"Model request limit exceeded ({self.count + 1} > {self.max_calls})")
+                raise ModelRequestLimitError("Model request limit exceeded")
             self.count += 1
 
     def acquire_sync(self):
         if self.count >= self.max_calls:
-            raise RuntimeError(f"Model request limit exceeded ({self.count + 1} > {self.max_calls})")
+            raise ModelRequestLimitError("Model request limit exceeded")
         self.count += 1
 
 
@@ -252,13 +279,64 @@ class ToolLimiter:
     async def acquire_async(self):
         async with self.lock:
             if self.count >= self.max_calls:
-                raise RuntimeError(f"Tool execution limit exceeded ({self.count + 1} > {self.max_calls})")
+                raise ToolBudgetExhausted("Tool execution limit exceeded")
             self.count += 1
 
     def acquire_sync(self):
         if self.count >= self.max_calls:
-            raise RuntimeError(f"Tool execution limit exceeded ({self.count + 1} > {self.max_calls})")
+            raise ToolBudgetExhausted("Tool execution limit exceeded")
         self.count += 1
+
+
+class ToolBudgetExhausted(RuntimeError):
+    """No more evidence calls may cross the service boundary."""
+
+
+class FinishInvestigation(AgentMiddleware):
+    """Reserve the last two model turns for assessment and one possible repair."""
+
+    def __init__(self, models, tools, read_names, rule):
+        self.model_limiter, self.tool_limiter, self.read_names = models, tools, read_names
+        self.rule = rule
+        self.last_assessment = None
+        self.repair_attempted = False
+
+    async def awrap_model_call(self, request, handler):
+        evidence_ids = set()
+        for message in request.messages:
+            if isinstance(message, ToolMessage) and message.name in self.read_names and message.status != 'error':
+                evidence_ids.update(extract_evidence_ids(message.content))
+        finish = (self.model_limiter.count >= self.model_limiter.max_calls - 2
+                  or self.tool_limiter.count >= self.tool_limiter.max_calls or self.repair_attempted)
+        guidance = 'Evidence references must be selected only from these returned IDs: ' + json.dumps(sorted(evidence_ids)[:32])
+        if finish:
+            guidance += ('\nThe evidence-reading budget is complete. Return Assessment now using the available evidence. '
+                         'State material gaps and uncertainty; do not invent missing evidence. Keep summary under 600 '
+                         'characters. Include the concise slack_message for a security finding.')
+        system = SystemMessage(content=request.system_message.content + '\n\n' + guidance)
+        response = await handler(request.override(system_message=system, tools=[] if finish else request.tools))
+        if isinstance(response.structured_response, Assessment):
+            self.last_assessment = validate_and_sanitize_assessment(response.structured_response, evidence_ids, self.rule)
+            if (not self.last_assessment.get('slack_message') and not self.repair_attempted
+                    and self.model_limiter.count < self.model_limiter.max_calls):
+                self.repair_attempted = True
+                # Retry through the normal agent loop; never manually rewrite the model's words.
+                messages = [message.model_copy(update={'content': MESSAGE_REPAIR_INSTRUCTION})
+                            if isinstance(message, ToolMessage) and message.name == 'Assessment' else message
+                            for message in response.result]
+                return ModelResponse(result=messages)
+        return response
+
+
+MESSAGE_REPAIR_INSTRUCTION = (
+    'Return the Assessment again with a usable slack_message. Keep the valid investigation facts. '
+    'Use exactly headline (at most 80 characters), context (at most 260 characters), and impact '
+    '(at most 220 characters). Prefer one short sentence per field, human names, and plain text. '
+    'Do not use internal identifiers, Markdown, line breaks, or claims that Awasi performed a fix. '
+    'Use only the evidence IDs listed in the system instructions; do not invent references. '
+    'The technical summary must be at most 600 characters, technical impact at most 300, and '
+    'question_for_owner at most 200. Use only allowed enum values.'
+)
 
 
 class LimitedTool(BaseTool):
@@ -278,13 +356,19 @@ class LimitedTool(BaseTool):
         )
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
-        self.limiter.acquire_sync()
+        try:
+            self.limiter.acquire_sync()
+        except ToolBudgetExhausted:
+            return {"unavailable": True, "error": "evidence_budget_exhausted"}
         if hasattr(self.inner, "invoke"):
             return self.inner.invoke(kwargs if kwargs else (args[0] if args else {}))
         return self.inner.run(*args, **kwargs)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
-        await self.limiter.acquire_async()
+        try:
+            await self.limiter.acquire_async()
+        except ToolBudgetExhausted:
+            return {"unavailable": True, "error": "evidence_budget_exhausted"}
         if hasattr(self.inner, "ainvoke"):
             return await self.inner.ainvoke(kwargs if kwargs else (args[0] if args else {}))
         return self.inner.run(*args, **kwargs)
@@ -443,12 +527,15 @@ class ModelInvestigator:
                     "question_for_owner": persisted.get("question_for_owner"),
                     "evidence_refs": persisted.get("evidence_refs", []),
                     "recommended_playbook": persisted.get("recommended_playbook"),
+                    "slack_message": persisted.get("slack_message"),
                     "source": persisted.get("source", "model"),
                     "fallback_reason": persisted.get("fallback_reason"),
                 }
 
         # 2. Attempt model-backed investigation inside bounded timeout
+        completion = None
         async def _run() -> Dict[str, Any]:
+            nonlocal completion
             raw_model = self._build_model()
             raw_tools = await self.aget_tools()
 
@@ -462,7 +549,10 @@ class ModelInvestigator:
                 model_name=self.model_name,
             )
             tools = [LimitedTool(t, tool_limiter) if isinstance(t, BaseTool) else t for t in raw_tools]
-            agent = create_agent(model, tools, response_format=Assessment)
+            completion = FinishInvestigation(model_limiter, tool_limiter, {t.name for t in tools}, facts.get('rule'))
+            agent = create_agent(model, tools,
+                response_format=ToolStrategy(Assessment, handle_errors=MESSAGE_REPAIR_INSTRUCTION),
+                system_prompt=SYSTEM_PROMPT, middleware=[completion])
 
             prompt_content = (
                 f"Please investigate security finding {finding_id}.\n"
@@ -470,7 +560,6 @@ class ModelInvestigator:
                 f"Use get_finding and other tools to verify evidence and return your Assessment."
             )
             messages = [
-                SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=prompt_content),
             ]
 
@@ -517,8 +606,14 @@ class ModelInvestigator:
             return await asyncio.wait_for(_run(), timeout=self.timeout_seconds)
         except Exception as e:
             clean_reason = sanitize_error(e)
+            if completion and completion.last_assessment is not None:
+                retained = {**completion.last_assessment, 'source': 'model'}
+                log.warning('Message repair failed for finding %s; retaining validated investigation: %s', finding_id, clean_reason)
+                if self.store and case_id:
+                    self.store.save_investigation(case_id, retained, source='model')
+                return retained
             log.warning("Model investigation failed for finding %s; falling back to scripted: %s", finding_id, clean_reason)
-            fallback = scripted_fallback(finding_id, facts, reason=clean_reason)
+            fallback = scripted_fallback(finding_id, facts, reason=e)
             if self.store and case_id:
                 self.store.save_investigation(case_id, fallback, source="fallback")
             return fallback

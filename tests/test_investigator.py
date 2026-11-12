@@ -126,6 +126,7 @@ def test_investigator_tool_use_and_assessment(store):
     )
     # 2. Model outputs Assessment
     assessment_args = {
+        "slack_message": {"headline":"An agent outlasted its owner’s access", "context":"Maya is inactive, but her agent can still read customer details.", "impact":"Customer access has no active owner."},
         "summary": "Maya Chen left Helio today, but her Sales Research Agent retained access.",
         "impact": "Exposes 6 customer database records.",
         "likely_cause": "offboarding_gap",
@@ -158,6 +159,7 @@ def test_investigator_tool_use_and_assessment(store):
     assert "Maya Chen" in result["summary"]
     assert result["evidence_refs"] == ["agent:sales-research"]
     assert result["confidence"] == "high"
+    assert store.get_investigation(cid)["slack_message"] == assessment_args["slack_message"]
 
     # Spans must be recorded in store for model and tool
     spans = store.get_spans(cid)
@@ -280,7 +282,9 @@ def test_model_requests_are_stopped_before_fifth(store):
         tools=[get_finding],
         store=store,
     )
-    asyncio.run(inv.investigate("finding-limit-1", {"rule": "inactive_owner_agent_access"}, case_id=cid))
+    result = asyncio.run(inv.investigate("finding-limit-1", {"rule": "inactive_owner_agent_access"}, case_id=cid))
+    assert result["fallback_reason"] == "model_request_limit"
+    assert store.get_investigation(cid)["fallback_reason"] == "model_request_limit"
     assert len([s for s in store.get_spans(cid) if s["kind"] == "model"]) <= 4
 
 
@@ -327,7 +331,9 @@ def test_ledger_counts_each_model_request(tmp_path):
             "impact": "Customer access.",
             "likely_cause": "offboarding_gap",
             "confidence": "high",
-            "evidence_refs": [],
+            "evidence_refs": ["finding-1"],
+            "slack_message": {"headline": "Agent access needs review", "context": "The agent can read customer details.",
+                              "impact": "An inactive owner cannot supervise this access."},
         }, "id": "final"}]),
     ]
     ledger = LiveLedger(tmp_path / "ledger.json")

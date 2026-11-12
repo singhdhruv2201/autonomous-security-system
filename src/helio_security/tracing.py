@@ -48,6 +48,8 @@ def sanitize_error(err: Any) -> str:
     if err is None:
         return ""
     err_cls = err.__class__.__name__
+    if err_cls == "ModelRequestLimitError":
+        return "model_request_limit"
     err_str = str(err).lower()
     if "timeout" in err_cls.lower() or "timeout" in err_str:
         return "timeout"

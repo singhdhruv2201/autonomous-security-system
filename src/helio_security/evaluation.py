@@ -109,7 +109,7 @@ def build_eval_model(model_name):
     schema=Assessment.model_json_schema()
     def supported(value):
         if isinstance(value,dict):
-            return {k:supported(v) for k,v in value.items() if k not in ('maxLength','maxItems','default')}
+            return {k:supported(v) for k,v in value.items() if k not in ('maxLength','minLength','maxItems','default')}
         if isinstance(value,list): return [supported(v) for v in value]
         return value
     schema=supported(schema)

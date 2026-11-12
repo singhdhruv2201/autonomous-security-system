@@ -30,6 +30,7 @@ except ImportError:
     SlackApiError = None
 
 from .cases import CaseStore
+from .notification_copy import clean_message
 from . import workbench_messages
 from .slack_store import SlackStore
 
@@ -233,6 +234,22 @@ class SlackNotifier:
         else:
             header_target = format_role(addressed_to)
             body_text = f"To: {header_target}\nSecurity decision required ({record_count} customers)."
+
+        if key in ("lead_decision", "workbench_public", "workbench_restricted", "workbench_destination", "workbench_owner_notice"):
+            investigation = self.cases.get_investigation(case_id)
+            copy = clean_message(investigation.get('slack_message')) if investigation and investigation.get('source') == 'model' else None
+            if copy:
+                parts = body_text.split("\n\n")
+                index = 1 if parts[0].startswith('To:') else 0
+                context = [f"*{escape_slack_text(copy['headline'])}*\n{escape_slack_text(copy['context'])}",
+                           f"*Why it matters*\n{escape_slack_text(copy['impact'])}"]
+                if key == 'workbench_restricted':
+                    # A contained public-app case starts with status; retain it.
+                    parts[index] = '*What Awasi did*\n' + parts[index].partition('\n')[2]
+                    parts[index:index] = context
+                else:
+                    parts[index:index+1] = context
+                body_text = "\n\n".join(parts)
 
         closed = (self.cases.get_case(case_id) or {}).get("status") in ("resolved", "needs_review", "dismissed")
         if decision or closed:

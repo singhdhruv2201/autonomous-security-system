@@ -113,5 +113,5 @@ def test_evaluation_requests_strict_schema_without_unsupported_constraints(monke
     schema=tool['input_schema']
     assert schema['additionalProperties'] is False
     assert set(schema['required'])==set(schema['properties'])
-    assert 'maxLength' not in json.dumps(schema) and 'maxItems' not in json.dumps(schema)
+    assert all(k not in json.dumps(schema) for k in ('maxLength','minLength','maxItems'))
     assert model.bound.max_retries==0

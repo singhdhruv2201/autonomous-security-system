@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .redaction import scrub_text, safe_identifier
+from .notification_copy import clean_message
 
 
 CASE_STATUSES = frozenset({
@@ -162,6 +163,8 @@ class CaseStore:
             inv_columns = {row["name"] for row in db.execute("PRAGMA table_info(case_investigations)")}
             if "fallback_reason" not in inv_columns:
                 db.execute("ALTER TABLE case_investigations ADD COLUMN fallback_reason TEXT")
+            if "slack_message" not in inv_columns:
+                db.execute("ALTER TABLE case_investigations ADD COLUMN slack_message TEXT")
 
     # ------------------------------------------------------------------
     # Cases
@@ -536,8 +539,8 @@ class CaseStore:
             db.execute(
                 """INSERT OR REPLACE INTO case_investigations
                    (case_id, summary, impact, likely_cause, confidence, question_for_owner,
-                    evidence_refs, recommended_playbook, source, raw_response, fallback_reason, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    evidence_refs, recommended_playbook, source, raw_response, fallback_reason, created_at, slack_message)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     case_id,
                     assessment.get("summary", ""),
@@ -551,6 +554,7 @@ class CaseStore:
                     raw,
                     fallback_reason,
                     t,
+                    json.dumps(clean_message(assessment.get("slack_message"))),
                 ),
             )
 
@@ -560,6 +564,10 @@ class CaseStore:
             if not row:
                 return None
             item = dict(row)
+            try:
+                item["slack_message"] = clean_message(json.loads(item.get("slack_message") or "null"))
+            except (ValueError, TypeError):
+                item["slack_message"] = None
             try:
                 item["evidence_refs"] = json.loads(item["evidence_refs"])
             except Exception:

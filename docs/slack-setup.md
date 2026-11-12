@@ -142,26 +142,36 @@ SQLite checkpoint recovery, and startup outages without contacting Slack.
 
 ## 8. Notification wording
 
-Slack notifications use deterministic templates with human-readable names. They
-separate what happened, what Awasi verified, and the decision being requested into
-short sections. Model summaries, cause codes, evidence IDs, grant IDs and raw HTTP
-errors stay in the case investigation rather than being pasted into the channel.
-Anthropic still investigates the case; it does not compose these notifications.
+The investigator writes a `slack_message` alongside its normal assessment, in the
+same model call. Three short fields provide a headline, what happened, and why it
+matters. The model chooses natural wording and case-specific context rather than
+filling a fixed sentence. It is instructed to use human names, distinguish possible
+exposure from observed activity, and explain material uncertainty without IDs or
+raw tool errors.
 
-For example, an inactive-owner notification explains that Maya is marked inactive,
-her Sales Research Agent could still read six customers' CRM data, and Awasi has
-verified its pause. It then asks whether Sales still needs the agent and explains
-the choices. A requested change is not described as completed until verified.
+Slack places that explanation in a consistent layout, followed by verified action
+status and the decision controls supplied by the workflow. The model does not set
+button choices, approvals, recipients, deadlines or action results. Follow-up
+approvals and final outcomes retain deterministic wording. This change only adds
+message authorship; it does not expand the model's tools or remediation authority.
 
-The outbox saves the original notification context alongside the rendered body.
-Button callbacks and later updates retain the same asset, recipient and counts,
-even after the workflow moves to a different question or the worker restarts.
-Existing outboxes get an additive `payload` column; older Workbench notifications
-can recover context from their persisted question event. Completed questions lose
-buttons, repeated questions and response-deadline reminders. Decision labels use
-phrases such as “Remove the connection and resume”, not internal choice codes.
+The message is validated, redacted and saved with the investigation. Repeated
+notifications, button clicks and restarts reuse it without another model request.
+The investigation reserves its last two model turns for the assessment and a
+possible correction. Missing, unusable or ungrounded copy gets at most one automatic
+wording correction, within the existing four-request ceiling. The six evidence-call
+ceiling also remains enforced; excess lookups return an unavailable result so the
+model can finish with the evidence it has. If correction fails, Awasi retains the
+valid investigation and uses the existing friendly template. Checks catch excess length, markup, internal IDs and
+obvious claims that Awasi performed a fix; they are not a general semantic fact
+checker. Model grounding still depends on the recorded evidence and prompt.
 
-These changes take effect when the updated worker renders notifications. Existing
-Slack messages are not automatically rewritten by a code update. Tests use fake
-Slack transport and real SQLite/HTTP/Neo4j boundaries; no paid model requests are
-needed to validate notification wording.
+The outbox saves original notification context alongside its rendered body. Button
+callbacks and later updates retain the same asset, recipient and counts, even after
+the workflow moves to a different question. Existing outboxes and investigation
+records receive additive columns. Older investigations without a message continue
+to use the template; they do not trigger an automatic paid rewrite.
+
+Completed questions lose buttons, repeated questions and response-deadline
+reminders. Decision labels use readable phrases, not internal choice codes.
+Existing Slack messages are not automatically rewritten by a code update.
