@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f9f6">
+  <meta name="description" content="Run Awasi's security workflows against a fresh Helio simulation.">
+  <title>Awasi · Product Showcase</title>
+  <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/showcase.css">
+  <script src="/assets/showcase.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to showcase</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#main"><img src="/assets/mark.svg" alt="" width="31" height="31"> Awasi <span>Showcase</span></a>
+      <nav aria-label="Showcase sections">
+        <a href="#scenarios">Scenarios</a>
+        <a href="#investigation">Investigation</a>
+        <a href="#runtime">Runtime</a>
+      </nav>
+      <button id="environment" class="button button-outline" disabled>Start baseline</button>
+    </div>
+  </header>
+
+  <main id="main" class="shell">
+    <section class="hero" aria-labelledby="hero-heading">
+      <div class="hero-intro">
+        <p class="eyebrow"><span class="signal"></span> HELIO SIMULATION</p>
+        <h1 id="hero-heading">See Awasi in action.</h1>
+        <p>Trigger a security event in a fresh Helio environment. Follow how Awasi traces access, investigates the evidence, and verifies the fix.</p>
+        <button id="hero-action" class="button button-primary" disabled>Start baseline <span aria-hidden="true">↗</span></button>
+      </div>
+      <div class="hero-system">
+        <div class="hero-status">
+          <span class="status-dot" id="environment-dot"></span>
+          <span id="environment-status">Environment offline</span>
+          <span id="slack-mode" hidden></span>
+          <code id="environment-id"></code>
+        </div>
+        <div class="system-route" aria-label="Data flow from Helio services to Awasi policies and verified actions">
+          <div><span class="system-icon">◎</span><strong>Helio services</strong><small>Directory · CRM · Workbench</small></div>
+          <span class="system-arrow" aria-hidden="true">→</span>
+          <div><span class="system-icon">⌘</span><strong>Awasi policy</strong><small>Graph · Rules · Assessment</small></div>
+          <span class="system-arrow" aria-hidden="true">→</span>
+          <div><span class="system-icon">✓</span><strong>Verified action</strong><small>Playbooks · Human review</small></div>
+        </div>
+      </div>
+    </section>
+
+    <p id="announcement" class="sr-only" role="status"></p>
+    <p id="error" class="error-banner" role="alert" hidden></p>
+
+    <section id="scenarios" class="scenario-section" aria-labelledby="scenario-heading">
+      <div class="section-heading">
+        <div><h2 id="scenario-heading">Scenarios</h2><p>Choose an event and follow it from detection to remediation.</p></div>
+        <span id="scenario-count" class="section-aside"></span>
+      </div>
+      <div id="scenario-options" class="scenario-options"></div>
+      <div id="scenario-control" class="scenario-control" hidden>
+        <div><strong id="scenario-title"></strong><p id="scenario-description"></p></div>
+        <label id="public-option" class="variant" hidden><input id="public-view" type="checkbox"> Include anonymous access</label>
+        <button id="run-scenario" class="button button-dark" disabled>Run scenario <span aria-hidden="true">→</span></button>
+      </div>
+    </section>
+
+    <section id="investigation" class="grid" aria-label="Investigation and evidence">
+      <article class="panel graph-panel">
+        <div class="panel-heading">
+          <div><h2>Access graph</h2><p id="graph-subtitle">Observed relationships for the selected scenario.</p></div>
+          <span id="finding-status" class="chip neutral">Awaiting baseline</span>
+        </div>
+        <div id="graph" class="graph-surface"></div>
+        <div id="graph-inspector" class="graph-inspector"></div>
+        <details class="panel-details">
+          <summary>Policy and evidence</summary>
+          <div id="policy-evidence"></div>
+        </details>
+      </article>
+
+      <article class="panel model-panel">
+        <div class="panel-heading">
+          <div><h2>Model assessment</h2><p>Anthropic’s evidence-grounded response.</p></div>
+          <span id="model-source" class="chip neutral">Awaiting case</span>
+        </div>
+        <div id="model-options" class="model-options" hidden>
+          <button type="button" id="recorded-option" class="segment" aria-pressed="true">Recorded</button>
+          <button type="button" id="current-option" class="segment" aria-pressed="false">This run</button>
+        </div>
+        <div id="assessment" class="assessment"></div>
+        <details id="model-detail" class="panel-details" hidden>
+          <summary>Structured response</summary>
+          <pre id="model-json"></pre>
+        </details>
+      </article>
+    </section>
+
+    <section id="runtime" class="grid runtime-grid" aria-label="Runtime and decisions">
+      <article class="panel metrics-panel">
+        <div class="panel-heading">
+          <div><h2>Environment metrics</h2><p>Recorded at each observation and workflow step.</p></div>
+          <span id="graph-counts" class="section-aside"></span>
+        </div>
+        <div id="metric-options" class="metric-options"></div>
+        <div id="metric-chart" class="metric-chart"></div>
+        <div id="sources" class="sources"></div>
+      </article>
+      <article class="panel timeline-panel">
+        <div class="panel-heading">
+          <div><h2>Case activity</h2><p>Human decisions, playbooks, and verification.</p></div>
+          <div class="case-badges">
+            <span id="case-status" class="chip neutral">Awaiting case</span>
+            <span id="slack-delivery" class="chip neutral" role="status" hidden></span>
+          </div>
+        </div>
+        <div id="decision" class="decision" hidden></div>
+        <div class="log-controls">
+          <label for="log-filter">Show</label>
+          <select id="log-filter">
+            <option value="all">All events</option>
+            <option value="case">Selected case</option>
+            <option value="sources">Source events</option>
+            <option value="traces">Technical traces</option>
+          </select>
+          <span id="log-count"></span>
+        </div>
+        <ol id="timeline" class="timeline"></ol>
+      </article>
+    </section>
+
+    <footer><span>Awasi Product Showcase</span><span>Local session · Synthetic Helio data</span></footer>
+  </main>
+</body>
+</html>

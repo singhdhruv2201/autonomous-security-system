@@ -1,0 +1,93 @@
+{
+  "scenarios": {
+    "external": {
+      "model": "claude-haiku-5-5",
+      "captured_on": "2026-11-12",
+      "scenario": "external",
+      "assessment": {
+        "summary": "Finding flags the Lead Enrichment Agent (owner Zara Ali, active) with an enabled connection to host \"enrich-leads\" that sent 6 confidential customer-database records (contact_email, notes, plan, etc.) externally. Workbench shows an admin.change altering destination/url/enabled, then an agent.send at 10:06:44 UTC. Rule: agent_unapproved_destination. CRM activity lookup failed (503); public app probe for enrich-leads returned not found.",
+        "impact": "Confidential customer contact emails, notes and subscription/plan data (6 records) sent to an unapproved external destination; exposure is ongoing per leaking_now.",
+        "likely_cause": "unapproved_tool",
+        "confidence": "high",
+        "question_for_owner": "Did you intentionally change the Lead Enrichment Agent's destination/URL to enrich-leads, and is that destination approved?",
+        "evidence_refs": [
+          "9563f853-c95a-5aa2-a880-7341b8ea734e",
+          "agent-lead-enrichment",
+          "emp-zara-ali",
+          "grant-lead-enrichment",
+          "customer-database",
+          "agent:lead-enrichment",
+          "WyJoZWxpbyIsIkNvbm5lY3Rpb24iLCJbXCJhZ2VudC1sZWFkLWVucmljaG1lbnRcIixcImVucmljaC1sZWFkc1wiXSJd"
+        ],
+        "recommended_playbook": null,
+        "slack_message": null
+      }
+    },
+    "public": {
+      "model": "claude-haiku-5-5",
+      "captured_on": "2026-11-12",
+      "scenario": "public",
+      "assessment": {
+        "summary": "Finding 8a80473a: Renewal Tracker (app-renewal-tracker, owner emp-luca-rossi, active) is publicly visible; its service account service:renewal-tracker (active) holds grant-renewal-tracker with customers:read on customer-database (confidential, 6 records). No anonymous views in the last hour; leaking_now=false. Workbench shows one admin.change to visibility. CRM activity lookup returned HTTP 503.",
+        "impact": "Confidential customer data (6 records) in customer-database is reachable through a publicly visible app. No anonymous views observed in the last hour; actual exposure is unconfirmed.",
+        "likely_cause": "unknown",
+        "confidence": "medium",
+        "question_for_owner": "Was the Renewal Tracker intentionally made public, and should it be restricted to internal audiences?",
+        "evidence_refs": [
+          "8a80473a-6e87-585e-bd74-1a649d4bde27",
+          "app-renewal-tracker",
+          "emp-luca-rossi",
+          "service:renewal-tracker",
+          "grant-renewal-tracker",
+          "customer-database"
+        ],
+        "recommended_playbook": null,
+        "slack_message": null
+      }
+    },
+    "offboarding": {
+      "model": "claude-haiku-5-5",
+      "captured_on": "2026-11-12",
+      "scenario": "offboarding",
+      "assessment": {
+        "summary": "Finding d0021554 (rule inactive_owner_agent_access, high, open) shows agent:sales-research, owned by inactive employee emp-maya-chen, still holds an active grant-sales-agent with customers:read on customer-database (confidential, 6 records). Directory, CRM and workbench sources are fresh and coverage is complete. Workbench has no events; CRM activity lookup returned HTTP 503, so usage is unverified. Exposure is recorded as none and leaking_now false.",
+        "impact": "Retained read access to 6 confidential customer-database records via an agent whose owner is inactive. No current exposure or dependents recorded.",
+        "likely_cause": "offboarding_gap",
+        "confidence": "high",
+        "question_for_owner": null,
+        "evidence_refs": [
+          "d0021554-01b7-5e38-8ba2-d4fdd9f1aa5b",
+          "agent:sales-research",
+          "grant-sales-agent",
+          "emp-maya-chen",
+          "customer-database",
+          "helio-crm"
+        ],
+        "recommended_playbook": null,
+        "slack_message": null
+      }
+    },
+    "public_view": {
+      "model": "claude-haiku-5-5",
+      "captured_on": "2026-11-12",
+      "scenario": "public",
+      "assessment": {
+        "summary": "Finding 8a80473a: Renewal Tracker (app-renewal-tracker, owner emp-luca-rossi, active) is publicly visible; its service account service:renewal-tracker (active) holds grant-renewal-tracker with customers:read on customer-database (confidential, 6 records). No anonymous views in the last hour; leaking_now=false. Workbench shows one admin.change to visibility. CRM activity lookup returned HTTP 503.",
+        "impact": "Confidential customer data (6 records) in customer-database is reachable through a publicly visible app. No anonymous views observed in the last hour; actual exposure is unconfirmed.",
+        "likely_cause": "unknown",
+        "confidence": "medium",
+        "question_for_owner": "Was the Renewal Tracker intentionally made public, and should it be restricted to internal audiences?",
+        "evidence_refs": [
+          "8a80473a-6e87-585e-bd74-1a649d4bde27",
+          "app-renewal-tracker",
+          "emp-luca-rossi",
+          "service:renewal-tracker",
+          "grant-renewal-tracker",
+          "customer-database"
+        ],
+        "recommended_playbook": null,
+        "slack_message": null
+      }
+    }
+  }
+}
