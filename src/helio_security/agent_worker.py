@@ -339,6 +339,29 @@ async def run_worker(worker, slack_handler=None, slack_transport=None, *, retry_
                 log.warning("Slack transport cleanup failed")
 
 
+async def run_with_mcp(worker, slack_handler=None, slack_transport=None):
+    from .mcp_runtime import mcp_connections
+    from .mcp_actions import create_mcp_playbooks
+    from .live_ledger import LiveLedger
+    worker_started = False
+    try:
+        if os.getenv("AWASI_LIVE_LEDGER"):
+            worker.deps.investigator.ledger = LiveLedger(os.environ["AWASI_LIVE_LEDGER"])
+        async with mcp_connections() as (read, actions):
+            worker.deps.investigator._tools = await read.list_tools()
+            worker.deps.playbooks = create_mcp_playbooks(actions)
+            worker_started = True
+            await run_worker(worker, slack_handler, slack_transport)
+    finally:
+        # run_worker owns cleanup after startup; before that, close resources
+        # already constructed by main even if MCP or ledger setup fails.
+        if not worker_started and slack_handler:
+            try:
+                await slack_handler.close_async()
+            except Exception:
+                log.warning("Slack transport cleanup failed")
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     try:
@@ -370,13 +393,13 @@ def main():
     slack_handler = None
     slack_transport = None
 
-    def scripted_investigator(fid: str, facts: dict):
-        agent_id = facts.get("agent_id", "Sales Research Agent")
-        return {
-            "summary": f"Agent {agent_id} retained customer database access after owner offboarded.",
-            "confidence": "high",
-            "source": "scripted",
-        }
+    from .investigator import ModelInvestigator
+
+    investigator = ModelInvestigator(
+        tools=[],
+        store=case_store,
+    )
+    playbooks = {}
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -420,8 +443,8 @@ def main():
         store=case_store,
         checkpointer=checkpointer,
         notifier=notifier,
-        investigator=scripted_investigator,
-        playbooks=REGISTRY,
+        investigator=investigator,
+        playbooks=playbooks,
         company_id=company_id,
         owner_deadline_seconds=deadline_sec,
         platform_store=platform_store,
@@ -452,7 +475,7 @@ def main():
 
     log.info("Starting Awasi agent worker loop...")
     try:
-        loop.run_until_complete(run_worker(worker, slack_handler, slack_transport))
+        loop.run_until_complete(run_with_mcp(worker, slack_handler, slack_transport))
     finally:
         worker._release_lock()
 

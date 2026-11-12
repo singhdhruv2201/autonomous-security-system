@@ -29,4 +29,7 @@ helio_dashboard = ["static/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["neo4j: requires a running Neo4j instance and NEO4J_TEST_URI"]
+markers = [
+    "neo4j: requires a running Neo4j instance and NEO4J_TEST_URI",
+    "live: requires live Anthropic API access and --live flag",
+]

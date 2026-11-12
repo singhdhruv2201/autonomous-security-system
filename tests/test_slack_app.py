@@ -369,3 +369,57 @@ def test_unverified_undo_does_not_claim_access_is_disabled_or_restored(setup, un
     assert 'current crm access has not been verified' in text
     assert 'disabled' not in text
     assert 'restored' not in text
+
+
+def test_lead_message_renders_investigation_summary(setup):
+    store, cid, _, _, notifier, question = setup
+    now = time.time()
+    store.save_investigation(
+        cid,
+        {
+            "summary": "Agent sales-research retained customer database access without active human supervisor.",
+            "impact": "6 customer records accessible",
+            "likely_cause": "Owner offboarded without credential deprovisioning",
+            "confidence": "high",
+            "question_for_owner": "Should we decommission this agent?",
+            "evidence_refs": ["finding-1", "agent:sales-research"],
+            "recommended_playbook": "crm.pause_principal",
+        },
+        source="model",
+        now=now,
+    )
+    rendered = notifier.render_body(cid, "lead_decision", question)
+    text = rendered["text"]
+    assert "retained customer database access without active human supervisor" in text
+    assert "Likely cause: Owner offboarded without credential deprovisioning" in text
+    assert "confidence: high" in text
+    assert "evidence count: 2" in text
+    assert "Should we decommission this agent?" in text
+
+
+def test_lead_message_escapes_slack_markup(setup):
+    from helio_security.slack_app import escape_slack_text
+    assert escape_slack_text("A & B <admin>") == "A &amp; B &lt;admin&gt;"
+
+    store, cid, _, _, notifier, question = setup
+    now = time.time()
+    store.save_investigation(
+        cid,
+        {
+            "summary": "Agent accessed <internal> customer db & records.",
+            "impact": "Exposed <data> & details",
+            "likely_cause": "unapproved_tool",
+            "confidence": "high",
+            "question_for_owner": "Should we remove <agent> & revoke?",
+            "evidence_refs": [],
+        },
+        source="model",
+        now=now,
+    )
+    rendered = notifier.render_body(cid, "lead_decision", question)
+    text = rendered["text"]
+    assert "&lt;internal&gt;" in text
+    assert "&amp;" in text
+    assert "&lt;agent&gt;" in text
+    assert "<internal>" not in text
+    assert "<agent>" not in text

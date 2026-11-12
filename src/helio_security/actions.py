@@ -6,6 +6,7 @@ an indeterminate outcome requires review. Original state survives process loss.
 import inspect
 
 from .playbooks import PlaybookError, UnknownOutcome
+from .tracing import Tracer
 
 
 async def call_playbook(method, target, deps, **kwargs):
@@ -34,10 +35,16 @@ async def dispatch(deps, case_id, playbook_id, target, *, requested_by="awasi", 
         return store.get_action(action_id)
     pb = deps.playbooks.get(playbook_id)
     expected = {"expected_state": undo_of["before"]["principal_status"]} if undo_of else {}
+    tracer = Tracer(store, case_id) if hasattr(store, "record_span") else None
 
     async def reconcile():
         try:
-            return bool(pb and await call_playbook(pb.verify, target, deps, **expected))
+            if pb:
+                if tracer:
+                    with tracer.span("action", f"{playbook_id}.verify", attributes={"target": target, "playbook": playbook_id}):
+                        return bool(await call_playbook(pb.verify, target, deps, **expected))
+                return bool(await call_playbook(pb.verify, target, deps, **expected))
+            return False
         except Exception:
             return False
 
@@ -53,7 +60,11 @@ async def dispatch(deps, case_id, playbook_id, target, *, requested_by="awasi", 
             raise PlaybookError("Playbook does not support durable execution")
         before = action["before"]
         if before is None:
-            before = await call_playbook(pb.read, target, deps)
+            if tracer:
+                with tracer.span("action", f"{playbook_id}.read", attributes={"target": target, "playbook": playbook_id}):
+                    before = await call_playbook(pb.read, target, deps)
+            else:
+                before = await call_playbook(pb.read, target, deps)
         if not isinstance(before, dict) or not before:
             raise PlaybookError("Missing original target state")
     except Exception:
@@ -66,13 +77,26 @@ async def dispatch(deps, case_id, playbook_id, target, *, requested_by="awasi", 
                         dispatched_at=deps.clock(), now=deps.clock())
     try:
         if undo_of:
-            result = await call_playbook(pb.undo, target, deps, before=undo_of["before"], before_state=before)
+            op_name = f"{playbook_id}.undo"
+            if tracer:
+                with tracer.span("action", op_name, attributes={"target": target, "playbook": playbook_id}):
+                    result = await call_playbook(pb.undo, target, deps, before=undo_of["before"], before_state=before)
+            else:
+                result = await call_playbook(pb.undo, target, deps, before=undo_of["before"], before_state=before)
         else:
-            result = await call_playbook(pb.run, target, deps, before_state=before)
+            op_name = f"{playbook_id}.run"
+            if tracer:
+                with tracer.span("action", op_name, attributes={"target": target, "playbook": playbook_id}):
+                    result = await call_playbook(pb.run, target, deps, before_state=before)
+            else:
+                result = await call_playbook(pb.run, target, deps, before_state=before)
         status = "executed"
-    except PlaybookError as error:
-        status = "unknown" if isinstance(error, UnknownOutcome) else "failed"
-        result = {"reason": "outcome_unknown" if status == "unknown" else "action_rejected"}
+    except UnknownOutcome:
+        status = "executed" if await reconcile() else "unknown"
+        result = {"reconciled": status == "executed"}
+    except PlaybookError:
+        status = "failed"
+        result = {"reason": "action_rejected"}
     except Exception:
         status = "executed" if await reconcile() else "unknown"
         result = {"reconciled": status == "executed"}

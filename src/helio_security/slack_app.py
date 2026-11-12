@@ -55,6 +55,13 @@ def format_name(employee_id: str) -> str:
     return employee_id
 
 
+def escape_slack_text(text: Optional[str]) -> str:
+    """Escape control characters for Slack mrkdwn: &, <, and >."""
+    if not text:
+        return ""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 @dataclass
 class SlackConfig:
     bot_token: str = ""
@@ -146,11 +153,19 @@ class SlackNotifier:
                 action_text = "I paused its CRM access. Last verified CRM state: disabled."
             else:
                 action_text = "A pause of CRM access has not been verified."
-            body_text = (
-                f"{header}\nMaya Chen's Sales Research Agent retained customer database access "
-                f"({record_count} customers) after its owner became inactive. {action_text} "
-                "Dependency impact has not been independently verified. Does Sales still need it?"
-            )
+            inv = self.cases.get_investigation(case_id) if hasattr(self.cases, "get_investigation") else None
+            if inv and inv.get("summary"):
+                summary_text = escape_slack_text(inv["summary"])
+                evidence_count = len(inv.get("evidence_refs", []))
+                cause_text = f" Likely cause: {inv['likely_cause']} (confidence: {inv.get('confidence', 'medium')}, evidence count: {evidence_count})." if inv.get("likely_cause") else ""
+                owner_q = escape_slack_text(inv.get("question_for_owner") or "Does Sales still need it?")
+                body_text = f"{header}\n{summary_text}{cause_text} {action_text} {owner_q}"
+            else:
+                body_text = (
+                    f"{header}\nMaya Chen's Sales Research Agent retained customer database access "
+                    f"({record_count} customers) after its owner became inactive. {action_text} "
+                    "Dependency impact has not been independently verified. Does Sales still need it?"
+                )
         elif key.startswith("approve:"):
             header_target = format_role(addressed_to)
             header = f"To: {header_target}"

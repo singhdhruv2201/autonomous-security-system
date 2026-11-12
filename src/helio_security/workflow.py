@@ -128,7 +128,11 @@ def build_graph(deps: WorkflowDeps):
         now = deps.clock()
         facts_dict = state.get("facts", {})
 
-        inv = deps.investigator(state.get("finding_id"), facts_dict)
+        inv_fn = getattr(deps.investigator, "investigate", deps.investigator)
+        try:
+            inv = inv_fn(state.get("finding_id"), facts_dict, case_id=case_id)
+        except TypeError:
+            inv = inv_fn(state.get("finding_id"), facts_dict)
         if inspect.iscoroutine(inv):
             inv = await inv
 

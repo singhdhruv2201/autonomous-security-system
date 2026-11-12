@@ -311,7 +311,7 @@ Target copy for the orphaned agent (one thread):
 
 - `src/helio_security/mcp_read.py`: `read_server = FastMCP("awasi-read")`. Tools, all marked read-only, each a thin wrapper over the security API with the viewer token: `get_finding(finding_id)`, `get_entity(entity_id)`, `get_neighbors(entity_id)`, `get_crm_activity(actor_id, limit)`. Arguments are IDs only, validated; results are size-bounded. No tool takes a URL, a query string or free text.
 - `src/helio_security/mcp_actions.py`: `actions_server = FastMCP("awasi-actions")` with one tool per playbook operation, marked destructive. The `execute` and Undo paths call these; nothing else does.
-- The worker connects to each server over stdio with `MCPAdapter(Path(...))`. Tests connect in memory with `MCPAdapter(server)`. Known ceiling: both servers share one container and its environment; the upgrade path is separate services over HTTP with separate credentials.
+- The worker manages two stdio subprocesses through `mcp_runtime.mcp_connections()`, using `MCPAdapter` with a FastMCP client and explicit per-server configuration. Tests cover both in-memory adapters and real stdio sessions. Both servers still share the worker container and network boundary; the upgrade path is separate services over HTTP with separate credentials.
 - `src/helio_security/investigator.py`:
   - `Assessment` (pydantic): `summary` (max 600 chars), `impact` (max 300), `likely_cause` (one of `offboarding_gap`, `accidental_sharing`, `intentional_sharing`, `unapproved_tool`, `possible_compromise`, `unknown`), `confidence` (`high`, `medium`, `low`), `question_for_owner` (optional, max 200), `evidence_refs` (IDs), `recommended_playbook` (optional).
   - Build with `create_agent(model, read_tools, response_format=Assessment)`. Cap tool calls and set a 60-second timeout.
@@ -480,7 +480,7 @@ Update after each phase with date, commit, and the test commands and counts actu
 - Phase 0, cut and reset: **complete — 2026-11-10**. Included in the `Complete Awasi v1 Phase 0 cleanup` commit, based on `f816639`; see Git history for its hash.
 - Phase 1, case loop on the orphaned agent: **complete — 2026-11-10**. See verification section below.
 - Phase 2, Slack: **complete — 2026-11-10**. See verification section below.
-- Phase 3, model, MCP and tracing: not started
+- Phase 3, model, MCP and tracing: **implementation and review fixes verified — 2026-11-11; live Slack acceptance pending**. See the follow-up verification section and `docs/phase3-validation.md`.
 - Phase 4, workbench and outside: not started
 - Phase 5, graph, rules and workbench playbooks: not started
 - Phase 6, dashboard: not started
@@ -701,3 +701,136 @@ The backend review findings are implemented; Phase 2 Slack delivery is still not
   `git diff --check` and `docker compose config --quiet` passed. Live Slack
   messages and the UI walkthrough were not rerun. Neo4j was started only for
   verification and stopped afterward; demo volumes were preserved.
+
+### Phase 3 model-backed investigation implementation — 2026-11-11
+
+- **Read-only MCP server (`src/helio_security/mcp_read.py`).** Exposed `get_finding`,
+  `get_entity`, `get_neighbors`, and `get_crm_activity` over FastMCP tagged read-only.
+  All identifiers validated against regex `^[a-zA-Z0-9_\-.:]{1,128}$`, limits capped
+  to [1, 20], responses bounded, and sensitive customer/credential data redacted.
+- **Action MCP adapter (`src/helio_security/mcp_actions.py`).** Exposed `crm_pause_principal`,
+  `crm_undo_pause`, and `crm_revoke_grant` tagged destructive, plus `crm_read` and `crm_verify`.
+  `create_mcp_playbooks` wraps the MCP action server into durable dispatch playbooks for the
+  deterministic workflow.
+- **Local tracing & CaseStore integration (`src/helio_security/tracing.py`, `cases.py`).**
+  Implemented `trace_spans` table with parent-child linkage, duration, character and token
+  counts, and sanitized attributes. `CaseTracer` callback captures LangChain model and tool
+  runs. Exposed spans in `GET /cases/{id}` (`get_case_full`).
+- **Model-backed investigator (`src/helio_security/investigator.py`).** Structured `Assessment`
+  schema (summary <= 600 chars, impact <= 300 chars, likely cause, confidence, owner question,
+  evidence refs, recommended playbook). Post-validation drops ungrounded evidence IDs, lowers
+  confidence if ungrounded, and allowlists recommended playbooks. Automatic fallback to scripted
+  assessment on any timeout, error, or missing key. Model receives exclusively read tools.
+- **Spend & request ceiling ledger (`src/helio_security/live_ledger.py`).** Persistent JSON
+  ledger in `data/live_test_ledger.json` tracking cumulative requests, token usage, and costs.
+  Enforces hard caps ($1.00 spend and 10 requests). Zero paid calls in normal test suite;
+  live tests are opt-in via `@pytest.mark.live` and `--live`.
+- **Workflow, worker, and Slack integration.** `WorkflowDeps` and `AgentWorker` updated to use
+  `ModelInvestigator` and MCP action playbooks. Slack lead messages render safe model summaries,
+  likely causes, confidence, and owner questions while preserving verified action truthful wording.
+- **Test results:**
+  - Standard test suite: `.venv/bin/python -m pytest -q` — **614 passed, 18 skipped**
+    (17 Neo4j integration skips + 1 opt-in live test skip). Zero paid calls made.
+  - Live test run: `pytest tests/test_investigator_live.py --live` — **1 passed**.
+  - Historical ledger reported 5 requests, 24,284 input tokens, 3,048 output tokens,
+    and **$0.003954** estimated cost. Follow-up review found fabricated usage for
+    failed requests; these totals are not verified provider billing. Preserve this
+    history and reconcile it before allowing further live requests.
+  - `git diff --check` and `docker compose config --quiet` passed with 0 errors.
+
+### Phase 3 review fixes — 2026-11-11
+
+Addressed all eight review findings (P1 and P2) and reproduced/resolved all 13 regression cases:
+
+1. **MCP action result decoding & error handling (`src/helio_security/mcp_actions.py`).**
+   - Implemented `_decode_mcp_result()` unwrapping FastMCP `ToolResult` structures, decoding JSON text
+     blocks and structured content, while preserving literal `False` for verification.
+   - Replaced silent fallback with strict return-type validation (`dict` for `read`/`run`/`undo`, `bool`
+     for `verify`).
+   - Removed transport secrets and endpoint URLs (`crm_url`, `action_token`, `observer_token`) from
+     MCP action tool signatures; configuration resolves from environment securely.
+   - Added `ToolAnnotations(destructive_hint=True)` to mutating tools and `ToolAnnotations(read_only_hint=True)`
+     to read/verify tools.
+   - Added real CRM HTTP integration tests through MCP in `tests/test_mcp_actions.py`.
+
+2. **Pre-execution limits on model and tools (`src/helio_security/investigator.py`).**
+   - Implemented `LimitedChatModel(Runnable)` checking `ModelLimiter` (max 4 calls) *before* invoking the model.
+   - Implemented `LimitedTool(BaseTool)` using `ToolLimiter` with `asyncio.Lock` for atomic reservations (max 6 calls),
+     safely stopping parallel tool bursts before the 7th execution.
+   - Tool discovery (`aget_tools`) and model initialization now execute inside the total investigation timeout.
+   - Bounded ID regex ceiling expanded to 2048 characters to support canonical base64url graph IDs.
+
+3. **Atomic ledger tracking & fail-closed budget (`src/helio_security/live_ledger.py`).**
+   - Updated `check_and_reserve()` to persist pending reservations atomically with UUID and cost estimates.
+   - Updated `get_data()` to raise `BudgetExceededError` on corrupted ledger files rather than resetting balances.
+   - Unknown model IDs fail closed with explicit pricing errors.
+   - Each model invocation is tracked and recorded in the ledger, with usage counted per call.
+
+4. **Evidence ID extraction & redaction (`src/helio_security/investigator.py`, `mcp_read.py`).**
+   - `extract_evidence_ids()` parses MCP TextContent JSON and extracts only domain keys (`id`, `agent_id`,
+     `grant_id`, etc.), excluding transport IDs (`lc_...`) and status strings.
+   - Prompt-only IDs are no longer promoted into evidence without being observed from read tools.
+   - `validate_and_sanitize_assessment()` correctly validates allowlisted playbooks against the rule's playbooks.
+   - `redact_evidence()` scrubs email patterns (`[REDACTED_EMAIL]`), secrets (`[REDACTED_SECRET]`), drops
+     email keys, and bounds response payloads to 64 KB.
+   - `get_entity` and `get_neighbors` resolve source IDs (`agent:`, `emp-`, etc.) to canonical graph IDs.
+
+5. **Local tracing safety & actions integration (`src/helio_security/tracing.py`, `actions.py`, `cases.py`).**
+   - `Tracer.span` and `CaseTracer` wrap span storage in safe recording handlers to prevent trace failures
+     from crashing business workflows.
+   - `filter_attributes()` bounds attribute string lengths to 200 characters and sanitizes values.
+   - `CaseStore.get_spans()` supports bounded pagination (`limit`, `offset`).
+   - `CaseStore.save_investigation()` and `case_investigations` table persist `fallback_reason`.
+   - `dispatch()` in `actions.py` records explicit trace spans for `read`, `run`/`undo`, and `verify`.
+
+6. **Slack mrkdwn escaping (`src/helio_security/slack_app.py`).**
+   - Added `escape_slack_text()` escaping `&`, `<`, and `>` in model-generated summaries and owner questions
+     to prevent markup corruption or injection.
+
+- **Test validation results:**
+  - Standard test suite: `.venv/bin/python -m pytest -q` — **637 passed, 18 skipped, 1 warning in 40s**.
+  - All 13 reproduction checks in `/tmp/awasi_phase3_review_test.py` passing: **13 passed in 2.10s**.
+  - Frontend UI test suite: `node --test tests/frontend/*.test.mjs` — **20 passed in 166ms**.
+  - `git diff --check` and `docker compose config --quiet` passed with 0 errors.
+  - Zero paid API calls made during review verification; persistent ledger and spend bounds fully intact.
+
+### Phase 3 follow-up corrections and verification — 2026-11-11
+
+The preceding review did not close all issues. This follow-up fixes the seven
+remaining findings and supersedes earlier accounting and completion claims.
+
+- Ledger reservations now lock the entire read/check/write transaction, persist
+  atomically, and settle idempotently without consuming another call's reservation.
+  Request estimates include messages, tool schemas, and the maximum output.
+  Missing usage remains unknown and charges the full reservation; legacy ledgers
+  block further calls until reconciled. Long-context pricing is accounted for.
+- Lost MCP mutation responses preserve an unknown outcome and use CRM read-back
+  reconciliation. Real HTTP and stdio tests verify committed, uncommitted, and
+  unreadable outcomes, with only one mutation attempt across recovery.
+- CRM activity uses `/activity?actor_id=...&limit=...`. Availability, interrupted
+  response state, and response-check metadata survive evidence projection.
+- Reads stream under the byte ceiling before JSON parsing. Only observation
+  metadata reaches the model; unknown customer fields and free-form notes are
+  dropped. Assessments and trace identifier values are scrubbed, and raw model
+  responses are not persisted.
+- Failed/not-found tool responses do not establish evidence. Only successful
+  outputs from the configured read tools can ground assessment references.
+- The worker owns real stdio read/action sessions and closes them on cancellation
+  and partial startup failure. Slack resources also close if startup fails.
+  `AWASI_LIVE_LEDGER` optionally applies the persistent allowance to the worker.
+
+Validation (all local and unpaid):
+
+- Added 24 focused regression cases. Behavioral fixes were preceded by failing
+  reproductions; final coverage includes real HTTP, stdio, cancellation, restart,
+  concurrent reservation, sensitive content, and unknown usage.
+- Standard suite before the final two edge fixes: **659 passed, 18 skipped**.
+  Both final edge tests failed first, then passed after their fixes.
+- Final `make test-integration`: **678 passed, 1 skipped**. This runs the complete
+  suite with real Neo4j; the only skip is the opt-in paid model test. One existing
+  LangChain MCP beta warning remains.
+- `git diff --check` and `docker compose config --quiet` passed. Neo4j was started
+  for validation and stopped afterward without deleting volumes.
+- No Claude requests or Slack messages were sent. Historical live usage was not
+  reset or modified. The complete live Slack acceptance remains pending; see
+  `docs/phase3-validation.md` for configuration and the accounting prerequisite.

@@ -143,6 +143,10 @@ Stop the Docker service before starting a local server on the same port. Local
 runs default to `data/helio.sqlite3`, independent of the Docker volume. Override
 the path by exporting `HELIO_DB_PATH`. Tests use temporary databases.
 
+For the model-backed investigator, MCP runtime, and paid-test limits, see
+[Phase 3 operation and validation](docs/phase3-validation.md). Normal tests do not
+make paid model calls.
+
 Runtime dependencies are pinned in `requirements.lock`; development dependencies
 are pinned in `requirements-dev.lock`. To deliberately refresh these locks:
 

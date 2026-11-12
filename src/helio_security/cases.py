@@ -16,6 +16,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from .redaction import scrub_text, safe_identifier
+
 
 CASE_STATUSES = frozenset({
     "investigating", "waiting_owner", "waiting_approver",
@@ -118,6 +120,36 @@ class CaseStore:
                     occurred_at REAL NOT NULL,
                     PRIMARY KEY(company_id, finding_id)
                 )""",
+                """CREATE TABLE IF NOT EXISTS trace_spans (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    case_id TEXT NOT NULL REFERENCES cases(id),
+                    parent_id TEXT,
+                    kind TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    ended_at REAL NOT NULL,
+                    input_chars INTEGER NOT NULL DEFAULT 0,
+                    output_chars INTEGER NOT NULL DEFAULT 0,
+                    tokens_in INTEGER,
+                    tokens_out INTEGER,
+                    error TEXT,
+                    attributes TEXT NOT NULL DEFAULT '{}'
+                )""",
+                """CREATE INDEX IF NOT EXISTS idx_trace_spans_case ON trace_spans(case_id, started_at)""",
+                """CREATE TABLE IF NOT EXISTS case_investigations (
+                    case_id TEXT PRIMARY KEY NOT NULL REFERENCES cases(id),
+                    summary TEXT NOT NULL,
+                    impact TEXT NOT NULL,
+                    likely_cause TEXT NOT NULL,
+                    confidence TEXT NOT NULL,
+                    question_for_owner TEXT,
+                    evidence_refs TEXT NOT NULL DEFAULT '[]',
+                    recommended_playbook TEXT,
+                    source TEXT NOT NULL DEFAULT 'model',
+                    raw_response TEXT NOT NULL DEFAULT '{}',
+                    fallback_reason TEXT,
+                    created_at REAL NOT NULL
+                )""",
             ]:
                 db.execute(statement)
             case_columns = {row["name"] for row in db.execute("PRAGMA table_info(cases)")}
@@ -127,6 +159,9 @@ class CaseStore:
             columns = {row["name"] for row in db.execute("PRAGMA table_info(case_actions)")}
             if "dispatch_version" not in columns:
                 db.execute("ALTER TABLE case_actions ADD COLUMN dispatch_version INTEGER NOT NULL DEFAULT 1")
+            inv_columns = {row["name"] for row in db.execute("PRAGMA table_info(case_investigations)")}
+            if "fallback_reason" not in inv_columns:
+                db.execute("ALTER TABLE case_investigations ADD COLUMN fallback_reason TEXT")
 
     # ------------------------------------------------------------------
     # Cases
@@ -441,6 +476,101 @@ class CaseStore:
                               (company_id, finding_id)).fetchone() is not None
 
     # ------------------------------------------------------------------
+    # Spans & Investigations
+    # ------------------------------------------------------------------
+
+    def record_span(self, span: dict):
+        attrs = span.get("attributes", {})
+        encoded_attrs = json.dumps(attrs, sort_keys=True) if isinstance(attrs, dict) else str(attrs)
+        with self.connection() as db:
+            db.execute(
+                """INSERT OR REPLACE INTO trace_spans
+                   (id, case_id, parent_id, kind, name, started_at, ended_at,
+                    input_chars, output_chars, tokens_in, tokens_out, error, attributes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    span["id"],
+                    span["case_id"],
+                    span.get("parent_id"),
+                    span["kind"],
+                    span["name"],
+                    span["started_at"],
+                    span["ended_at"],
+                    span.get("input_chars", 0),
+                    span.get("output_chars", 0),
+                    span.get("tokens_in"),
+                    span.get("tokens_out"),
+                    span.get("error"),
+                    encoded_attrs,
+                ),
+            )
+
+    def get_spans(self, case_id: str, *, limit: int = 500, offset: int = 0) -> list[dict]:
+        with self.connection() as db:
+            rows = db.execute(
+                "SELECT * FROM trace_spans WHERE case_id=? ORDER BY started_at ASC, id ASC LIMIT ? OFFSET ?",
+                (case_id, limit, offset),
+            ).fetchall()
+            spans = []
+            for r in rows:
+                item = dict(r)
+                try:
+                    item["attributes"] = json.loads(item["attributes"])
+                except Exception:
+                    pass
+                spans.append(item)
+            return spans
+
+    def save_investigation(self, case_id: str, assessment: dict, *, source: str = "model", now: float | None = None):
+        t = time.time() if now is None else now
+        assessment = dict(assessment)
+        for key, limit in (("summary", 600), ("impact", 300), ("question_for_owner", 200)):
+            if assessment.get(key) is not None:
+                assessment[key] = scrub_text(assessment[key])[:limit]
+        refs = assessment.get("evidence_refs", [])
+        refs = [ref for ref in refs if safe_identifier(ref)][:32] if isinstance(refs, (list, tuple)) else []
+        encoded_refs = json.dumps(refs)
+        raw = "{}"  # Raw model responses are never persisted.
+        fallback_reason = assessment.get("fallback_reason")
+        with self.connection() as db:
+            db.execute(
+                """INSERT OR REPLACE INTO case_investigations
+                   (case_id, summary, impact, likely_cause, confidence, question_for_owner,
+                    evidence_refs, recommended_playbook, source, raw_response, fallback_reason, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    case_id,
+                    assessment.get("summary", ""),
+                    assessment.get("impact", ""),
+                    assessment.get("likely_cause", "unknown"),
+                    assessment.get("confidence", "low"),
+                    assessment.get("question_for_owner"),
+                    encoded_refs,
+                    assessment.get("recommended_playbook"),
+                    source,
+                    raw,
+                    fallback_reason,
+                    t,
+                ),
+            )
+
+    def get_investigation(self, case_id: str) -> dict | None:
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM case_investigations WHERE case_id=?", (case_id,)).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            try:
+                item["evidence_refs"] = json.loads(item["evidence_refs"])
+            except Exception:
+                pass
+            try:
+                item["raw_response"] = json.loads(item["raw_response"])
+            except Exception:
+                pass
+            return item
+
+    # ------------------------------------------------------------------
     # API views
     # ------------------------------------------------------------------
 
@@ -451,6 +581,8 @@ class CaseStore:
         case["events"] = self.get_events(case_id)
         case["actions"] = self.get_actions(case_id)
         case["question"] = self.question(case_id)
+        case["spans"] = self.get_spans(case_id)
+        case["investigation"] = self.get_investigation(case_id)
         return case
 
     def list_cases(self, company_id: str, *, limit: int = 50, offset: int = 0) -> dict:
