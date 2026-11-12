@@ -38,6 +38,99 @@ def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+OPTIONAL_PRINCIPALS = {
+    "observer": {
+        "id": "service:security-observer",
+        "name": "Security Observer",
+        "kind": "service",
+        "owner": "emp-casey-wong",
+        "role": "user",
+        "grant_id": "grant-security-observer",
+        "scopes": ["accounts:read", "grants:read", "inventory:read"],
+        "resource_id": "crm-metadata",
+    },
+    "recovery": {
+        "id": "service:activity-reader",
+        "name": "Activity Reader",
+        "kind": "service",
+        "owner": "emp-casey-wong",
+        "role": "user",
+        "grant_id": "grant-activity-reader",
+        "scopes": ["events:read"],
+        "resource_id": "crm-activity",
+    },
+    "publisher": {
+        "id": "service:identity-publisher",
+        "name": "Identity Publisher",
+        "kind": "service",
+        "owner": "emp-casey-wong",
+        "role": "user",
+        "grant_id": "grant-identity-publisher",
+        "scopes": ["identity:publish"],
+        "resource_id": "crm-identity",
+    },
+    "actions": {
+        "id": "service:awasi-actions",
+        "name": "Awasi Actions",
+        "kind": "service",
+        "owner": "emp-casey-wong",
+        "role": "user",
+        "grant_id": "grant-awasi-actions",
+        "scopes": ["accounts:read", "grants:read", "access:change", "grants:revoke"],
+        "resource_id": "crm-metadata",
+    },
+    "renewal_tracker": {
+        "id": "service:renewal-tracker",
+        "name": "Renewal Tracker",
+        "kind": "service",
+        "owner": "emp-luca-rossi",
+        "role": "user",
+        "grant_id": "grant-renewal-tracker",
+        "scopes": ["customers:read"],
+        "resource_id": "customer-database",
+    },
+    "support_lookup": {
+        "id": "service:support-lookup",
+        "name": "Support Lookup",
+        "kind": "service",
+        "owner": "emp-nina-desai",
+        "role": "user",
+        "grant_id": "grant-support-lookup",
+        "scopes": ["customers:read"],
+        "resource_id": "customer-database",
+    },
+    "lead_enrichment": {
+        "id": "agent:lead-enrichment",
+        "name": "Lead Enrichment Agent",
+        "kind": "agent",
+        "owner": "emp-zara-ali",
+        "role": "user",
+        "grant_id": "grant-lead-enrichment",
+        "scopes": ["customers:read"],
+        "resource_id": "customer-database",
+    },
+    "renewal_digest": {
+        "id": "agent:renewal-digest",
+        "name": "Renewal Digest Agent",
+        "kind": "agent",
+        "owner": "emp-hannah-reed",
+        "role": "user",
+        "grant_id": "grant-renewal-digest",
+        "scopes": ["customers:read"],
+        "resource_id": "customer-database",
+    },
+}
+
+OPTIONAL_IDS = {v["id"] for v in OPTIONAL_PRINCIPALS.values()}
+
+LEGACY_WORKBENCH_DEFAULT_HASHES = {
+    token_hash("token-crm-renewal-tracker-local-workbench"),
+    token_hash("token-crm-support-lookup-local-workbench"),
+    token_hash("token-crm-lead-enrichment-local-workbench"),
+    token_hash("token-crm-renewal-digest-local-workbench"),
+}
+
+
 class CRMStore:
     def __init__(self, path: Path, *, activity_enabled=False, activity_limit=10000, policy_config=None, clock=time.time):
         if type(activity_enabled) is not bool:
@@ -71,10 +164,12 @@ class CRMStore:
 
     def initialize(self, employees, tokens):
         validate_credentials(tokens)
-        principals = {"admin": "service:crm-admin", "maya": "employee:emp-maya-chen",
-                      "agent": "agent:sales-research", "observer": "service:security-observer",
-                      "recovery": "service:activity-reader", "publisher": "service:identity-publisher",
-                      "actions": "service:awasi-actions"}
+        principals = {
+            "admin": "service:crm-admin",
+            "maya": "employee:emp-maya-chen",
+            "agent": "agent:sales-research",
+            **{k: v["id"] for k, v in OPTIONAL_PRINCIPALS.items()},
+        }
         if self.is_initialized():
             with self.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -82,18 +177,25 @@ class CRMStore:
                 if version not in {"1", "2", "3", "4"}:
                     raise ValueError("Unsupported CRM schema version")
                 existing = {r["principal_id"]: r["token_hash"] for r in db.execute("SELECT * FROM credentials")}
-                expected = {principals[k]: token_hash(v) for k, v in tokens.items()}
+                expected = {principals[k]: token_hash(v) for k, v in tokens.items() if k in principals}
+                # Reconcile legacy default workbench credentials if present in existing database
+                for key, info in OPTIONAL_PRINCIPALS.items():
+                    pid = info["id"]
+                    if pid in existing and existing[pid] in LEGACY_WORKBENCH_DEFAULT_HASHES and key in tokens:
+                        new_h = token_hash(tokens[key])
+                        db.execute("DELETE FROM credentials WHERE principal_id = ?", (pid,))
+                        db.execute("INSERT INTO credentials (token_hash, principal_id) VALUES (?, ?)", (new_h, pid))
+                        existing[pid] = new_h
                 if any(expected.get(k) != v for k, v in existing.items()) or any(
-                    k not in existing for k in expected if k not in {"service:security-observer", "service:activity-reader", "service:identity-publisher", "service:awasi-actions"}
+                    k not in existing for k in expected if k not in OPTIONAL_IDS
                 ):
                     raise ValueError("Configured credentials do not match stored credentials; restore the original .env")
                 if version == "1":
                     db.execute("ALTER TABLE grants ADD COLUMN resource_id TEXT NOT NULL DEFAULT 'customer-database'")
                     db.execute("UPDATE metadata SET value='2' WHERE key='schema_version'")
-                if "observer" in tokens and "service:security-observer" not in existing:
-                    self._add_observer(db, tokens["observer"])
-                if "recovery" in tokens and "service:activity-reader" not in existing:
-                    self._add_recovery_reader(db, tokens["recovery"])
+                for key, info in OPTIONAL_PRINCIPALS.items():
+                    if key in tokens and info["id"] not in existing:
+                        self._add_principal(db, tokens[key], info)
                 if version in {"1", "2"}:
                     activity.initialize(db)
                     db.execute("UPDATE metadata SET value='3' WHERE key='schema_version'")
@@ -102,10 +204,6 @@ class CRMStore:
                     activity.migrate_outbox(db)
                     db.execute("UPDATE metadata SET value='4' WHERE key='schema_version'")
                 policies.initialize(db)
-                if "publisher" in tokens and "service:identity-publisher" not in existing:
-                    self._add_publisher(db, tokens["publisher"])
-                if "actions" in tokens and "service:awasi-actions" not in existing:
-                    self._add_actions(db, tokens["actions"])
             return
         ids = {e["id"] for e in employees}
         if "emp-maya-chen" not in ids:
@@ -148,7 +246,7 @@ class CRMStore:
             db.execute("INSERT INTO principals VALUES ('agent:sales-research', 'Sales Research Agent', 'agent', 'emp-maya-chen', 'user')")
             db.execute("INSERT INTO principals VALUES ('service:crm-admin', 'CRM Administration', 'service', 'emp-casey-wong', 'admin')")
             db.executemany("INSERT INTO credentials VALUES (?, ?)",
-                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key not in {"observer", "recovery", "publisher", "actions"}])
+                           [(token_hash(token), principals[key]) for key, token in tokens.items() if key not in OPTIONAL_PRINCIPALS])
             db.executemany("INSERT INTO grants (id,principal_id,scopes,status,version) VALUES (?, ?, ?, 'active', 1)", [
                 ("grant-sales-agent", "agent:sales-research", json.dumps(["customers:read"])),
                 ("grant-maya", "employee:emp-maya-chen", json.dumps(["customers:read", "customers:write"])),
@@ -165,47 +263,46 @@ class CRMStore:
                 (f"cust-{slug}", name, f"contact@{slug}.example", plan, status)
                 for slug, name, plan, status in customers
             ])
-            if "observer" in tokens:
-                self._add_observer(db, tokens["observer"])
-            if "recovery" in tokens:
-                self._add_recovery_reader(db, tokens["recovery"])
-            if "actions" in tokens:
-                self._add_actions(db, tokens["actions"])
+            for key, info in OPTIONAL_PRINCIPALS.items():
+                if key in tokens:
+                    self._add_principal(db, tokens[key], info)
             activity.initialize(db)
             activity.migrate_outbox(db)
             db.execute("INSERT INTO metadata VALUES ('schema_version', '4')")
             policies.initialize(db)
-            if "publisher" in tokens:
-                self._add_publisher(db, tokens["publisher"])
 
     @staticmethod
-    def _add_publisher(db, token):
-        db.execute("INSERT INTO principals VALUES ('service:identity-publisher','Identity Publisher','service','emp-casey-wong','user')")
-        db.execute("INSERT INTO credentials VALUES (?,'service:identity-publisher')", (token_hash(token),))
-        db.execute("INSERT INTO grants (id,principal_id,scopes,status,version,resource_id) VALUES ('grant-identity-publisher','service:identity-publisher',?,'active',1,'crm-identity')", (json.dumps(['identity:publish']),))
+    def _add_principal(db, token, info):
+        db.execute(
+            "INSERT OR IGNORE INTO principals (id, name, kind, owner_employee_id, role) VALUES (?, ?, ?, ?, ?)",
+            (info["id"], info["name"], info["kind"], info["owner"], info["role"]),
+        )
+        db.execute("DELETE FROM credentials WHERE principal_id = ?", (info["id"],))
+        db.execute(
+            "INSERT OR REPLACE INTO credentials (token_hash, principal_id) VALUES (?, ?)",
+            (token_hash(token), info["id"]),
+        )
+        db.execute(
+            """INSERT OR REPLACE INTO grants (id, principal_id, scopes, status, version, resource_id)
+               VALUES (?, ?, ?, 'active', 1, ?)""",
+            (info["grant_id"], info["id"], json.dumps(info["scopes"]), info["resource_id"]),
+        )
 
-    @staticmethod
-    def _add_recovery_reader(db, token):
-        db.execute("INSERT INTO principals VALUES ('service:activity-reader', 'Activity Reader', 'service', 'emp-casey-wong', 'user')")
-        db.execute("INSERT INTO credentials VALUES (?, 'service:activity-reader')", (token_hash(token),))
-        db.execute("INSERT INTO grants (id,principal_id,scopes,status,version,resource_id) VALUES ('grant-activity-reader', 'service:activity-reader', ?, 'active', 1, 'crm-activity')",
-                   (json.dumps(['events:read']),))
+    @classmethod
+    def _add_publisher(cls, db, token):
+        cls._add_principal(db, token, OPTIONAL_PRINCIPALS["publisher"])
 
-    @staticmethod
-    def _add_observer(db, token):
-        db.execute("INSERT INTO principals VALUES ('service:security-observer', 'Security Observer', 'service', 'emp-casey-wong', 'user')")
-        db.execute("INSERT INTO credentials VALUES (?, 'service:security-observer')", (token_hash(token),))
-        db.execute("""INSERT INTO grants (id,principal_id,scopes,status,version,resource_id) VALUES ('grant-security-observer', 'service:security-observer',
-                   ?, 'active', 1, 'crm-metadata')""",
-                   (json.dumps(["accounts:read", "grants:read", "inventory:read"]),))
+    @classmethod
+    def _add_recovery_reader(cls, db, token):
+        cls._add_principal(db, token, OPTIONAL_PRINCIPALS["recovery"])
 
-    @staticmethod
-    def _add_actions(db, token):
-        db.execute("INSERT INTO principals VALUES ('service:awasi-actions', 'Awasi Actions', 'service', 'emp-casey-wong', 'user')")
-        db.execute("INSERT INTO credentials VALUES (?, 'service:awasi-actions')", (token_hash(token),))
-        db.execute("""INSERT INTO grants (id,principal_id,scopes,status,version,resource_id)
-                   VALUES ('grant-awasi-actions', 'service:awasi-actions', ?, 'active', 1, 'crm-metadata')""",
-                   (json.dumps(["accounts:read", "grants:read", "access:change", "grants:revoke"]),))
+    @classmethod
+    def _add_observer(cls, db, token):
+        cls._add_principal(db, token, OPTIONAL_PRINCIPALS["observer"])
+
+    @classmethod
+    def _add_actions(cls, db, token):
+        cls._add_principal(db, token, OPTIONAL_PRINCIPALS["actions"])
 
     @contextmanager
     def _operation_connection(self):

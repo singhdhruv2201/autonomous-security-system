@@ -1,7 +1,9 @@
-.PHONY: setup up stop test agent offboard restore-employee accounts grants audit revoke-agent update-customer
+.PHONY: setup up stop test agent offboard restore-employee accounts grants audit revoke-agent update-customer \
+	publish-app outsider-view connect-enrichment run-enrichment workbench-status outside-received
 
 setup:
 	PYTHONPATH=src python3 -m helio_security.setup
+	PYTHONPATH=src python3 -m helio_workbench.setup
 
 up:
 	docker compose up --build -d --wait
@@ -41,3 +43,22 @@ test-integration:
 .PHONY: security-overview security-findings security-connectors security-runs security-sync security-audit security-cases
 security-overview security-findings security-connectors security-runs security-sync security-audit security-cases:
 	docker compose exec -T security-api python -m helio_security.client $(patsubst security-%,%,$@)
+
+publish-app:
+	docker compose exec -T workbench python -m helio_workbench.control publish-app
+
+outsider-view:
+	docker compose exec -T -e WORKBENCH_URL=http://workbench:8004 outside python -m helio_workbench.control outsider-view
+
+connect-enrichment:
+	docker compose exec -T workbench python -m helio_workbench.control connect-enrichment
+	docker compose exec -T workbench python -m helio_workbench.runner agent-lead-enrichment
+
+run-enrichment:
+	docker compose exec -T workbench python -m helio_workbench.runner agent-lead-enrichment
+
+workbench-status:
+	docker compose exec -T workbench python -m helio_workbench.control status
+
+outside-received:
+	docker compose exec -T outside python -m outside.cli

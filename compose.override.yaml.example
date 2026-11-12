@@ -1,0 +1,14 @@
+# Development override: expose internal service ports on localhost.
+# Copy to compose.override.yaml if you need direct host access to internal services.
+# WARNING: Do not enable in production or isolated demo environments as it exposes
+# internal services to the host loopback.
+services:
+  simulator:
+    ports:
+      - "127.0.0.1:8000:8000"
+  crm:
+    ports:
+      - "127.0.0.1:8001:8001"
+  awasi-ingest:
+    ports:
+      - "127.0.0.1:8003:8003"

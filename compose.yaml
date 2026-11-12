@@ -4,8 +4,6 @@ services:
     build: .
     image: helio-simulator:local
     networks: [customer]
-    ports:
-      - "127.0.0.1:8000:8000"
     volumes:
       - company-data:/data
     healthcheck:
@@ -42,11 +40,13 @@ services:
       CRM_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
       CRM_RECOVERY_TOKEN: ${CRM_RECOVERY_TOKEN:?Run make setup first}
       CRM_ACTION_TOKEN: ${CRM_ACTION_TOKEN:-}
+      CRM_RENEWAL_TRACKER_TOKEN: ${CRM_RENEWAL_TRACKER_TOKEN:?Run make setup first}
+      CRM_SUPPORT_LOOKUP_TOKEN: ${CRM_SUPPORT_LOOKUP_TOKEN:?Run make setup first}
+      CRM_LEAD_ENRICHMENT_TOKEN: ${CRM_LEAD_ENRICHMENT_TOKEN:?Run make setup first}
+      CRM_RENEWAL_DIGEST_TOKEN: ${CRM_RENEWAL_DIGEST_TOKEN:?Run make setup first}
     depends_on:
       simulator:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:8001:8001"
     volumes:
       - crm-data:/data
     healthcheck:
@@ -72,8 +72,6 @@ services:
       CRM_RECOVERY_TOKEN: ${CRM_RECOVERY_TOKEN:?Run make setup first}
       SECURITY_OPERATOR_TOKEN: ${SECURITY_OPERATOR_TOKEN:?Run make setup first}
       SECURITY_VIEWER_TOKEN: ${SECURITY_VIEWER_TOKEN:?Run make setup first}
-    ports:
-      - "127.0.0.1:8003:8003"
     volumes:
       - activity-inbox:/data
     read_only: true
@@ -196,12 +194,66 @@ services:
       security-api:
         condition: service_healthy
     restart: unless-stopped
+  workbench:
+    build: .
+    image: helio-simulator:local
+    networks: [customer, internet]
+    command: ["uvicorn", "helio_workbench.api:app", "--host", "0.0.0.0", "--port", "8004"]
+    environment:
+      WORKBENCH_DB_PATH: /data/workbench.sqlite3
+      CRM_URL: http://crm:8001
+      WORKBENCH_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
+      WORKBENCH_ACTION_TOKEN: ${CRM_ACTION_TOKEN:?Run make setup first}
+      WORKBENCH_USER_TOKEN: ${CRM_MAYA_TOKEN:?Run make setup first}
+      CRM_RENEWAL_TRACKER_TOKEN: ${CRM_RENEWAL_TRACKER_TOKEN:?Run make setup first}
+      CRM_SUPPORT_LOOKUP_TOKEN: ${CRM_SUPPORT_LOOKUP_TOKEN:?Run make setup first}
+      CRM_LEAD_ENRICHMENT_TOKEN: ${CRM_LEAD_ENRICHMENT_TOKEN:?Run make setup first}
+      CRM_RENEWAL_DIGEST_TOKEN: ${CRM_RENEWAL_DIGEST_TOKEN:?Run make setup first}
+    depends_on:
+      crm:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8004:8004"
+    volumes:
+      - workbench-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+  outside:
+    build: .
+    image: helio-simulator:local
+    networks:
+      internet:
+        aliases:
+          - enrich-leads
+          - partner-api
+    extra_hosts:
+      - "host.docker.internal:127.0.0.1"
+    command: ["uvicorn", "outside.api:app", "--host", "0.0.0.0", "--port", "8005"]
+    environment:
+      OUTSIDE_DB_PATH: /data/outside.sqlite3
+    ports:
+      - "127.0.0.1:8005:8005"
+    volumes:
+      - outside-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 volumes:
   company-data:
   crm-data:
   security-graph-data:
   security-state:
   activity-inbox:
+  workbench-data:
+  outside-data:
 networks:
   customer:
   platform:
+  internet:

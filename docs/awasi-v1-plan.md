@@ -834,3 +834,76 @@ Validation (all local and unpaid):
 - No Claude requests or Slack messages were sent. Historical live usage was not
   reset or modified. The complete live Slack acceptance remains pending; see
   `docs/phase3-validation.md` for configuration and the accounting prerequisite.
+
+### Phase 4 implementation — 2026-11-11
+
+Implemented Phase 4: Helio Workbench and Outside service. No Awasi code modified.
+
+1. **Workbench Service (`src/helio_workbench/`):**
+   - Implemented SQLite store (`store.py`) with tables `apps`, `agents`, `destinations`, `events`, and `metadata`. Seeded with `app-renewal-tracker`, `app-support-lookup`, `agent-lead-enrichment`, and `agent-renewal-digest`.
+   - Optimistic concurrency control on mutations (`PATCH /apps/{id}`, `PATCH /agents/{id}`, `PATCH /agents/{id}/destinations/{host}`) with `expected_version`, returning 409 on version conflict.
+   - Distinct token authorization for observer, action, and user operations.
+   - `GET /public/{slug}` returns customer contact emails for public apps and logs `app.view` by `anonymous`.
+   - `GET /apps/{slug}` provides internal user access for company/public apps.
+   - `POST /agents/{id}/run` executes active agents, reads CRM customers, posts to enabled destinations, and logs `agent.send`. Paused agents return 409.
+   - Control CLI (`control.py`) and agent runner (`runner.py`).
+
+2. **Outside Service (`src/outside/`):**
+   - Implemented `POST /collect`, logging host, record count, bytes, and field names to SQLite (`collections`). Never stores record values.
+   - Implemented `GET /received`, aggregating counts, requests, bytes, and fields per host.
+   - Implemented CLI (`outside/cli.py`) for inspecting received data.
+
+3. **CRM Principal Extensibility (`src/helio_crm/`):**
+   - Added table-driven helper `_add_principal` in `store.py`.
+   - Added four optional principals with `customers:read` grants: `service:renewal-tracker` (owner Luca), `service:support-lookup` (owner Nina), `agent:lead-enrichment` (owner Zara), `agent:renewal-digest` (owner Hannah).
+   - Preserved default 7-key environment generation for security setup backwards compatibility.
+
+4. **Compose & Make (`compose.yaml`, `Makefile`):**
+   - Added `internet` network.
+   - `workbench` joins `customer` and `internet`.
+   - `outside` joins only `internet` with aliases `enrich-leads` and `partner-api`.
+   - Added `publish-app`, `outsider-view`, `connect-enrichment`, `run-enrichment`, `workbench-status`, `outside-received` make targets.
+
+- **Test validation results:**
+   - Standard test suite: `.venv/bin/python -m pytest -q` — **672 passed, 18 skipped, 1 warning in 50s**.
+   - Frontend UI test suite: `node --test tests/frontend/*.test.mjs` — **20 passed in 125ms**.
+   - `git diff --check` and `docker compose config --quiet` passed with 0 errors.
+
+### Phase 4 review fixes — 2026-11-11
+
+Fixed eight review findings across Workbench, Outside, CRM integration, and Compose network topology:
+
+1. **Atomic optimistic concurrency:** Made version checking and mutation atomic in SQLite using conditional `UPDATE ... WHERE id = ? AND version = ?` across apps, agents, and destinations. Ensured monotonic version increments and distinguished missing resources (404) from stale versions (409).
+2. **Strict destination creation:** Replaced `INSERT OR REPLACE` with existence check and `INSERT`, returning 409 Conflict when an agent/host pair already exists. Duplicate creation leaves URL, enabled state, and version unchanged. Administrative state changes and audit events commit in the same transaction.
+3. **Destination URL validation and Host pinning:** Enforced `http` or `https` schemes, rejected userinfo (`user:pass@`), validated hostname match against `{host}` path parameter, and pinned the HTTP client `Host` header to the configured target destination instead of caller-supplied headers. Host mutation is rejected on PATCH.
+4. **Strict capability separation:** Partitioned credentials across `require_user`, `require_action`, and `require_observer`. User operations require `WORKBENCH_USER_TOKEN` or an authorized CRM employee principal token (e.g. `CRM_MAYA_TOKEN`). Action and observer tokens cannot authenticate user routes. CLIs do not fall back across credential boundaries.
+5. **Removed cross-principal CRM token fallback:** Workbench app and agent executions require their designated CRM principal token (`CRM_RENEWAL_TRACKER_TOKEN`, `CRM_LEAD_ENRICHMENT_TOKEN`, etc.). Missing credentials fail with 503 before calling CRM; `CRM_AGENT_TOKEN` is never used as a catch-all fallback. CRM errors return 502 without leaking raw response bodies.
+6. **Truthful delivery metrics and inventory:** Delivery accounting counts only confirmed 2xx HTTP receipts toward `records_sent`, `records_sent_total`, and `last_sent_at`. Non-2xx responses (503, 302, timeouts) and unconfigured destinations return `records_sent: 0` and do not advance delivery counts or timestamps.
+7. **Atomic mutation and audit rollback:** Mutations and their corresponding `events` table entries are written within the same SQLite transaction. An audit failure rolls back the mutation and returns 500.
+8. **Closed outside-to-internal network bypass:** Removed loopback port bindings (`127.0.0.1:8000`, `127.0.0.1:8001`, `127.0.0.1:8003`) from `compose.yaml` for `simulator`, `crm`, and `awasi-ingest`. Added `extra_hosts: ["host.docker.internal:127.0.0.1"]` to the `outside` container. Added `compose.override.yaml.example` for manual port debugging. Removed hardcoded default credentials from Compose; created `helio_workbench.setup` generating distinct 32+ character tokens; added auto-migration for legacy default token hashes in existing CRM databases without resetting volumes.
+
+- **Verification results:**
+   - Standard test suite: `.venv/bin/python -m pytest -q` — **683 passed, 18 skipped, 1 warning in 57s**.
+   - Review suite: `PYTHONPATH=src:tests .venv/bin/python -m pytest -q /tmp/awasi_phase4_review_test.py` — **10 passed in 2.48s**.
+   - Focused suites: `test_workbench.py` (17 passed), `test_crm.py` (19 passed), `test_outside.py` (3 passed).
+   - Frontend UI test suite: `make test-ui` — **20 passed in 92ms**.
+   - Network isolation & disposable Compose acceptance: verified `outside` container cannot reach internal services directly or via `host.docker.internal`. Confirmed `publish-app`, `outsider-view`, `connect-enrichment`, `run-enrichment`, `restrict-app` behavior.
+   - Zero changes made to `src/helio_security/` or `src/helio_dashboard/`. No git commits or pushes made. No demo volumes reset. No paid Claude calls made.
+
+### Phase 4 follow-up fixes — 2026-11-11
+
+Fixed five follow-up review gaps:
+
+1. **Saved Destination Pre-send Validation (P1):** Validates saved destinations in SQLite before dispatching records in `run_agent()`. Mismatched, malformed, or hijacked destination URLs (e.g. `partner-api` label targeting unrelated hosts) are skipped without sending and logged with outcome `invalid_destination` and `record_count: 0`.
+2. **Uncertain Delivery & Attempted Record Count Accounting (P2):** Disconnections and lost acknowledgments (`httpx.RemoteProtocolError`, `httpx.ReadError`, `httpx.CloseError`, `httpx.TimeoutException`) are classified as `uncertain_disconnect` or `uncertain_timeout`. The audit event retains the attempted `record_count`, while confirmed delivery returns `records_sent: 0` and does not increment confirmed inventory totals.
+3. **Caller Identity Audit Logging (P2):** Destination creation in `add_destination_endpoint` logs the authenticated caller's identity (e.g. `emp-maya-chen` for Maya, or `user` for generic authenticated users) rather than attributing the action to the asset owner (`agent["owner_employee_id"]`).
+4. **Complete URL Validation (P2):** Hardened URL validation in `validate_and_normalize_destination_url` to reject whitespace, invalid port numbers (`:bogus`, ports `<= 0` or `> 65535`), and invalid hostnames (including hostnames with spaces).
+5. **Non-rotating Credential Setup & Explicit Migration (P2):** Routine `setup()` refuses to silently rotate configured legacy default credentials, raising a descriptive `ValueError` and preserving existing `.env` content. Added an explicit `migrate()` operation (`python -m helio_workbench.setup migrate`) to perform intentional credential rotation when requested.
+
+- **Verification results:**
+   - Standard test suite: `.venv/bin/python -m pytest -q` — **690 passed, 18 skipped, 1 warning in 54s**.
+   - Review suites: `PYTHONPATH=src:tests:/tmp .venv/bin/python -m pytest -q /tmp/awasi_phase4_review_test.py /tmp/awasi_phase4_followup_test.py` — **17 passed in 4.59s** (10 original review tests + 7 follow-up tests).
+   - Workbench suite: `tests/test_workbench.py` — **24 passed in 2.00s**.
+   - Frontend UI suite: `make test-ui` — **20 passed in 161ms**.
+   - Formatting and config: `git diff --check` and `docker compose config --quiet` passed with 0 errors.
+   - Zero modifications to `src/helio_security/` or `src/helio_dashboard/`. No commits or pushes made. No paid API calls or Slack messages sent.

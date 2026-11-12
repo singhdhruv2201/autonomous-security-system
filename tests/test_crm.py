@@ -220,3 +220,84 @@ def test_real_http_agent_is_blocked_after_real_http_revocation(crm_setup):
             server.should_exit = True
             thread.join(timeout=5)
             assert not thread.is_alive()
+
+
+def test_workbench_principals_can_read_customers(tmp_path):
+    import secrets
+    from helio_simulator.directory import Directory
+
+    directory = Directory(tmp_path / "directory.sqlite3")
+    directory.initialize()
+
+    tokens = {
+        "admin": secrets.token_urlsafe(32),
+        "maya": secrets.token_urlsafe(32),
+        "agent": secrets.token_urlsafe(32),
+        "renewal_tracker": secrets.token_urlsafe(32),
+        "support_lookup": secrets.token_urlsafe(32),
+        "lead_enrichment": secrets.token_urlsafe(32),
+        "renewal_digest": secrets.token_urlsafe(32),
+    }
+    store = CRMStore(tmp_path / "crm.sqlite3")
+    store.initialize(directory.employees(), tokens)
+
+    with TestClient(create_app(store.path, tokens, directory.employees)) as client:
+        for role, principal_id, owner_id in [
+            ("renewal_tracker", "service:renewal-tracker", "emp-luca-rossi"),
+            ("support_lookup", "service:support-lookup", "emp-nina-desai"),
+            ("lead_enrichment", "agent:lead-enrichment", "emp-zara-ali"),
+            ("renewal_digest", "agent:renewal-digest", "emp-hannah-reed"),
+        ]:
+            token = tokens[role]
+            resp = client.get("/customers", headers=auth(token))
+            assert resp.status_code == 200, f"{role} failed to read customers: {resp.text}"
+            assert len(resp.json()) == 6
+
+        # Check principals and grants directly in db
+        with store.connection() as db:
+            rows = dict(db.execute("SELECT id, owner_employee_id FROM principals").fetchall())
+            assert rows["service:renewal-tracker"] == "emp-luca-rossi"
+            assert rows["service:support-lookup"] == "emp-nina-desai"
+            assert rows["agent:lead-enrichment"] == "emp-zara-ali"
+            assert rows["agent:renewal-digest"] == "emp-hannah-reed"
+
+
+def test_reconcile_legacy_default_workbench_credentials_without_reset(tmp_path):
+    import secrets
+    from helio_simulator.directory import Directory
+
+    directory = Directory(tmp_path / "directory.sqlite3")
+    directory.initialize()
+
+    base_tokens = {
+        "admin": secrets.token_urlsafe(32),
+        "maya": secrets.token_urlsafe(32),
+        "agent": secrets.token_urlsafe(32),
+    }
+    legacy_tokens = {
+        **base_tokens,
+        "renewal_tracker": "token-crm-renewal-tracker-local-workbench",
+        "support_lookup": "token-crm-support-lookup-local-workbench",
+        "lead_enrichment": "token-crm-lead-enrichment-local-workbench",
+        "renewal_digest": "token-crm-renewal-digest-local-workbench",
+    }
+    store = CRMStore(tmp_path / "crm.sqlite3")
+    store.initialize(directory.employees(), legacy_tokens)
+
+    # Re-initialize with new random tokens
+    new_tokens = {
+        **base_tokens,
+        "renewal_tracker": secrets.token_urlsafe(32),
+        "support_lookup": secrets.token_urlsafe(32),
+        "lead_enrichment": secrets.token_urlsafe(32),
+        "renewal_digest": secrets.token_urlsafe(32),
+    }
+    store.initialize(directory.employees(), new_tokens)
+
+    # Verify new tokens work and legacy tokens fail
+    with TestClient(create_app(store.path, new_tokens, directory.employees)) as client:
+        for role in ["renewal_tracker", "support_lookup", "lead_enrichment", "renewal_digest"]:
+            resp = client.get("/customers", headers=auth(new_tokens[role]))
+            assert resp.status_code == 200
+            old_resp = client.get("/customers", headers=auth(legacy_tokens[role]))
+            assert old_resp.status_code == 401
