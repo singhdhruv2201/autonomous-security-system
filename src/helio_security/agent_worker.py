@@ -26,6 +26,7 @@ from .cases import CaseStore
 from .platform_store import PlatformStore
 from .playbooks import REGISTRY
 from .slack_app import LogNotifier, SlackConfig
+from .workbench_workflow import facts_from_finding
 from .workflow import WorkflowDeps, build_graph
 
 log = logging.getLogger(__name__)
@@ -198,34 +199,11 @@ class AgentWorker:
         unhandled_ids = self.case_store.open_findings_without_case(self.company_id, open_finding_ids=open_ids)
         for fid in unhandled_ids:
             finding = next(f for f in fresh_open if f["id"] == fid)
-            evidence = finding.get("evidence", {})
-            case_id = self.case_store.open_case(
-                self.company_id,
-                finding_id=fid,
-                route="investigating",
-                now=now,
-                addressed_to="emp-hannah-reed",
-            )
+            facts = facts_from_finding(finding)
+            case_id = self.case_store.open_case(self.company_id, finding_id=fid,
+                route="investigating", now=now, addressed_to=facts.get("addressed_to"))
             config = {"configurable": {"thread_id": case_id}}
-            state = {
-                "finding_id": fid,
-                "company_id": self.company_id,
-                "facts": {
-                    "rule": finding.get("rule", "inactive_owner_agent_access"),
-                    "target_kind": "agent",
-                    "owner_status": evidence.get("employee_status", "inactive"),
-                    "data_classification": evidence.get("classification", "confidential"),
-                    "record_count": evidence.get("record_count", 6),
-                    "exposure": "none",
-                    "leaking_now": False,
-                    "dependents": 0,
-                    "human_override": self.case_store.has_human_override(self.company_id, fid),
-                    "has_lead": True,
-                    "addressed_to": "emp-hannah-reed",
-                    "agent_id": evidence.get("agent_id", "agent:sales-research"),
-                    "grant_id": evidence.get("grant_id"),
-                },
-            }
+            state = {"finding_id":fid, "company_id":self.company_id, "facts":facts}
             await self._safe_run_case(case_id, state, config)
 
         # 2. Acknowledge decisions only after the graph stores their receipts.
@@ -342,11 +320,11 @@ async def run_worker(worker, slack_handler=None, slack_transport=None, *, retry_
 async def run_with_mcp(worker, slack_handler=None, slack_transport=None):
     from .mcp_runtime import mcp_connections
     from .mcp_actions import create_mcp_playbooks
-    from .live_ledger import LiveLedger
+    from .live_ledger import configured_ledger
     worker_started = False
     try:
         if os.getenv("AWASI_LIVE_LEDGER"):
-            worker.deps.investigator.ledger = LiveLedger(os.environ["AWASI_LIVE_LEDGER"])
+            worker.deps.investigator.ledger = configured_ledger()
         async with mcp_connections() as (read, actions):
             worker.deps.investigator._tools = await read.list_tools()
             worker.deps.playbooks = create_mcp_playbooks(actions)

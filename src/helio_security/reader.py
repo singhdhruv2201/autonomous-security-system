@@ -3,10 +3,11 @@
 import base64
 import binascii
 import json
+import os
 import time
 
 from .graph import NODE_KINDS
-from .rules import assess
+from .rules import RULES
 
 KINDS = set.union(*NODE_KINDS.values())
 
@@ -100,27 +101,34 @@ class GraphReader:
 
     def evaluate(self, now=None):
         now = time.time() if now is None else now
-        # Read source evidence and all known paths in one query, including retired
-        # paths. Missing evidence must stay distinguishable from explicit safety.
-        result = self.query("""
-            OPTIONAL MATCH (s:Source {company_id:$company})
-            WITH collect(properties(s)) AS sources
-            OPTIONAL MATCH p=(e:Employee {company_id:$company})-[:OWNS]->(a:Agent)
-                -[:HAS_GRANT]->(g:AccessGrant)-[:ON]->(d:DataResource)
-            WHERE all(n IN nodes(p) WHERE n.company_id=$company)
-            RETURN sources, collect({employee_id:e.id,employee_name:e.name,employee_status:e.status,
-                agent_id:a.id,grant_id:g.id,grant_status:g.status,grant_version:g.version,
-                resource_id:d.id,classification:d.classification,scopes:g.scopes,
-                principal_status:coalesce(a.principal_status,'active'),record_count:d.record_count,
-                present:all(n IN nodes(p) WHERE n.present=true) AND all(r IN relationships(p) WHERE r.present=true),
-                directory_observed_at:e.last_observed_at,crm_observed_at:g.last_observed_at}) AS candidates
-            """)[0]
+        # Capture source state and all rule paths in one query, as before the
+        # registry migration. Empty rule results must not discard other rules.
+        query = "OPTIONAL MATCH (s:Source {company_id:$company}) WITH collect(properties(s)) AS sources\n"
+        for index, rule in enumerate(RULES.values()):
+            query += f"CALL {{ CALL {{ {rule.query} }} RETURN collect(candidate) AS rows_{index} }}\n"
+        query += "RETURN sources, " + ", ".join(f"rows_{i}" for i in range(len(RULES)))
+        snapshot = self.query(query)[0]
         sources = {}
-        for source in result["sources"]:
+        for source in snapshot["sources"]:
             last = source.get("last_success")
             sources[source["source"]] = {"status": source.get("status"), "last_success": last,
                 "last_attempt": source.get("last_attempt"), "error": source.get("error"),
                 "fresh": source.get("status") == "ok" and last is not None and 0 <= now - last <= 900}
-        complete = all(sources.get(s, {}).get("fresh", False) for s in ("directory", "crm"))
-        return {"coverage_complete": complete, "sources": sources, "observed_at": now,
-                "candidates": [assess(r, complete) for r in result["candidates"] if r["grant_id"] is not None]}
+        approved = {h.strip().lower() for h in os.getenv("AWASI_APPROVED_DESTINATIONS", "partner-api").split(",") if h.strip()}
+        evaluations = []
+        for index, rule in enumerate(RULES.values()):
+            complete = all(sources.get(source, {}).get("fresh", False) for source in rule.sources)
+            candidates = {}
+            for row in snapshot[f"rows_{index}"]:
+                candidate = rule.assess(row, complete, approved)
+                key = tuple(candidate["identity"])
+                # An agent/destination with multiple grants remains unsafe while
+                # any active path exists; revoked parallel paths cannot hide it.
+                rank = {"resolved": 0, "unknown": 1, "open": 2}
+                if key not in candidates or rank[candidate["state"]] > rank[candidates[key]["state"]]:
+                    candidates[key] = candidate
+            evaluations.append({"rule": rule.id, "coverage_complete": complete,
+                "sources": sources, "observed_at": now, "candidates": list(candidates.values())})
+        # Preserve the original read contract while consumers migrate to the
+        # per-rule results. Reconciliation consumes evaluations, not this alias.
+        return {**evaluations[0], "evaluations": evaluations}

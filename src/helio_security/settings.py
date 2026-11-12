@@ -18,6 +18,8 @@ class Settings:
     graph_user: str = "neo4j"
     graph_password: str = ""
     sync_interval: int = 60
+    workbench_url: str | None = None
+    workbench_observer_token: str | None = None
 
     def __post_init__(self):
         tokens = (self.operator_token, self.viewer_token, self.observer_token)
@@ -34,6 +36,8 @@ class Settings:
                 db_path=Path(os.getenv("SECURITY_DB_PATH", "data/security.sqlite3")),
                 directory_url=os.getenv("HELIO_DIRECTORY_URL", "http://127.0.0.1:8000"),
                 crm_url=os.getenv("CRM_URL", "http://127.0.0.1:8001"),
+                workbench_url=os.getenv("WORKBENCH_URL"),
+                workbench_observer_token=os.getenv("WORKBENCH_OBSERVER_TOKEN", os.getenv("CRM_OBSERVER_TOKEN")),
                 graph_uri=os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687"),
                 graph_user=os.getenv("NEO4J_USER", "neo4j"), graph_password=os.environ["NEO4J_PASSWORD"],
                 sync_interval=int(os.getenv("SECURITY_SYNC_INTERVAL", "60")))

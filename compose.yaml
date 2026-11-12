@@ -107,7 +107,7 @@ services:
     volumes:
       - security-graph-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#neo4j/}\" 'RETURN 1' >/dev/null 2>&1"]
+      test: ["CMD", "wget", "--spider", "--quiet", "--timeout=3", "http://127.0.0.1:7474/"]
       interval: 10s
       timeout: 10s
       retries: 15
@@ -125,6 +125,9 @@ services:
       AWASI_ACTIVITY_URL: ${AWASI_ACTIVITY_URL:-}
       HELIO_DIRECTORY_URL: http://simulator:8000
       CRM_URL: http://crm:8001
+      AWASI_APPROVED_DESTINATIONS: ${AWASI_APPROVED_DESTINATIONS:-partner-api}
+      WORKBENCH_URL: http://workbench:8004
+      WORKBENCH_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
       CRM_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: neo4j
@@ -173,6 +176,10 @@ services:
       AWASI_CHECKPOINT_DB: ${AWASI_CHECKPOINT_DB:-/data/checkpoints.sqlite3}
       HELIO_COMPANY_ID: helio
       CRM_URL: http://crm:8001
+      AWASI_APPROVED_DESTINATIONS: ${AWASI_APPROVED_DESTINATIONS:-partner-api}
+      WORKBENCH_ACTION_TOKEN: ${CRM_ACTION_TOKEN:?Run make setup first}
+      WORKBENCH_URL: http://workbench:8004
+      WORKBENCH_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
       CRM_ACTION_TOKEN: ${CRM_ACTION_TOKEN:?Run make setup first}
       CRM_OBSERVER_TOKEN: ${CRM_OBSERVER_TOKEN:?Run make setup first}
       SECURITY_API_URL: http://security-api:8002
@@ -180,6 +187,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       AWASI_MODEL: ${AWASI_MODEL:-claude-haiku-5-5}
       AWASI_LIVE_LEDGER: ${AWASI_LIVE_LEDGER:-}
+      AWASI_LIVE_MAX_SPEND_USD: ${AWASI_LIVE_MAX_SPEND_USD:-1.0}
+      AWASI_LIVE_MAX_REQUESTS: ${AWASI_LIVE_MAX_REQUESTS:-10}
       AWASI_OWNER_DEADLINE_SECONDS: ${AWASI_OWNER_DEADLINE_SECONDS:-900}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}

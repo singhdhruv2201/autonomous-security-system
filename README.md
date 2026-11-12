@@ -1,171 +1,160 @@
-# Helio company simulator
+# Awasi v1 — Helio security demo
 
-A fictional company with a persistent directory (five teams, twenty employees)
-and a working Sales CRM. The CRM has its own database, enforced bearer-token
-permissions, six synthetic customers, an audit trail, and a Sales Research Agent
-that runs in a separate container and makes actual HTTP requests.
+Helio is a synthetic company with twenty employees, a CRM, two internal apps,
+two Workbench agents, and an outside receiver. Awasi observes their APIs, builds
+a Neo4j access graph, investigates risks, and coordinates verified fixes in Slack.
+This is a working local simulation, not an integration with Salesforce or another vendor.
 
-The separate security backend observes the directory and CRM through their APIs,
-builds a Neo4j company graph, and persists security findings. Its authenticated
-API runs on port 8002 with a background observation worker. The Awasi dashboard
-on port 3000 shows company security, the graph, agents, apps, policies, and findings.
-The platform currently observes one rule: inactive owners whose agents retain
-confidential CRM access. Optional owner, volume, failure and content controls are
-switched off for the v1 demo; CRM authentication, grants and principal validity
-remain enforced. AI investigation, Slack, and automated remediation are future
-steps in the canonical [Awasi v1 plan](docs/awasi-v1-plan.md).
-The CRM also has opt-in request/response activity capture and signed background
-webhook delivery, gap recovery, durable processing and a request-level Activity view
-(retained as evidence infrastructure). See [activity startup and recovery](docs/activity-processing.md) and
-[signed delivery and replay](docs/activity-delivery.md).
-See [dashboard guide](docs/dashboard.md), [security API and workflow](docs/backend.md) and [graph walkthrough](docs/graph.md).
+The model explains evidence using read-only MCP tools. Deterministic rules and
+workflows control containment, approvals, verification, and Undo. Model failure
+uses an explicitly recorded fallback; it never gives the model permission to fix things.
 
-## Start with Docker
+## Setup
 
-```sh
-make setup
-make up
-make security-overview
-```
-
-Open **http://localhost:3000** for the Awasi dashboard.
-Use **http://localhost:8000/docs** for the directory or
-**http://localhost:8001/docs** for the CRM API explorer, or
-**http://localhost:8002/docs** for the security platform API.
-`make setup` generates six CRM credentials, two security API tokens, a webhook signing secret, and a Neo4j password in a local `.env` file
-with owner-only permissions. It preserves existing credentials on repeat runs.
-The file is excluded from Git and Docker build contexts; there is no committed
-credential template. Never share it or the output of `docker compose config`
-without `--quiet`, which can expand credentials.
-
-Data is seeded on first startup into separate `company-data`, `crm-data`, and
-`security-graph-data` volumes, plus `security-state` for findings and job history.
-Restarting preserves state. All published ports are bound to localhost;
-this development environment is not intended for public exposure.
-
-Neo4j Browser is available at **http://localhost:7474/browser/**. Connect to
-`bolt://localhost:7687` as `neo4j`, using `NEO4J_PASSWORD` from your local `.env`.
-The v1 local `.env` sets `SECURITY_SYNC_INTERVAL=15` (the fallback is 60 seconds).
-Use `make security-sync`
-to queue an additional refresh, `make security-runs` to track it, and
-`make security-findings` to view persisted risks.
-
-## CRM demo
-
-```sh
-make agent              # Reads six synthetic customers and prints a summary
-make update-customer    # Maya updates a customer note using her write grant
-make offboard           # Mark Maya inactive in the company directory
-make agent              # With owner enforcement off: separate credential still works
-make grants             # Inspect ownership, scopes, status, and versions
-make revoke-agent       # Administrator revokes the agent's access grant
-make agent              # Expected failure: HTTP 403, exit code 2 from agent
-make audit              # Inspect recorded reads, writes, denials, and revocation
-```
-
-The `make` command may also exit 2 when a recipe fails; the agent itself exits 2
-for access denial. It exits 1 for configuration/network errors.
-The v1 setup leaves `CRM_OWNER_MODE`, `CRM_VOLUME_MODE`, `CRM_FAILURE_MODE`
-and `CRM_CONTENT_MODE` off. Directory offboarding alone does not revoke CRM access.
-The platform observes the gap; a later v1 phase will pause the agent.
-The walkthrough intentionally leaves Maya inactive and the grant revoked.
-See [CRM details and reset instructions](docs/crm.md) for the access model,
-API contract, and how to repeat the scenario with fresh CRM data.
-
-```sh
-docker compose stop       # Stop while preserving company state
-docker compose up -d      # Start again
-```
-
-For an intentional full reset of this simulator's data:
-
-```sh
-docker compose down -v
-docker compose up -d --wait
-```
-
-## Company structure
-
-| Team ID | Team | Employees | Lead |
-| --- | --- | ---: | --- |
-| engineering | Engineering | 8 | Jordan Lee |
-| sales | Sales | 4 | Hannah Reed |
-| support | Customer Support | 3 | Owen Clark |
-| operations | Operations | 3 | Amara James |
-| leadership | Leadership | 2 | Alex Rivera |
-
-All employees start active. Names and addresses are synthetic; emails use the
-reserved `helio.example` domain. Maya Chen (`emp-maya-chen`) is a sales account
-executive and the offboarding scenario's subject. A local operator command changes
-employment status; the directory's HTTP endpoints remain read-only.
-
-An employee has a stable ID, name, email, team ID, job title, employment status,
-and team-lead flag. Team membership has a database foreign key, and a team cannot
-have two designated leads. Lead designation describes the organization; it does
-not grant security-platform approval permissions.
-
-## API
-
-| Method | Path | Result |
-| --- | --- | --- |
-| GET | `/company` | Company identity and current counts |
-| GET | `/teams` | Teams, employee counts, and lead IDs |
-| GET | `/teams/sales` | Sales team details and members |
-| GET | `/employees` | All employees |
-| GET | `/employees?team_id=sales&status=active` | Filtered directory |
-| GET | `/employees/emp-maya-chen` | One employee |
-| GET | `/health` | Database connectivity check |
-| GET | `/snapshot` | Complete teams/employees snapshot from one transaction |
-
-Unknown employees or teams return 404, and unsupported status filters return 422.
-Team counts include both active and inactive employees. IDs stay stable across
-restarts and fixture resets, ready for future application ownership and graph
-relationships. There are no write endpoints in this milestone.
-
-```sh
-curl http://localhost:8000/company
-curl http://localhost:8000/teams/sales
-```
-
-## Local development and tests
-
-Python 3.11+ is required. Docker provides Python without a host installation.
+Requires Docker Compose (2.24.4+ for the optional acceptance overlay), Python 3.11+
+and Node.js for frontend tests.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.lock
-.venv/bin/python -m pytest -q
-make test-integration  # Complete suite including real Neo4j; requires make up
-PYTHONPATH=src .venv/bin/python -m uvicorn helio_simulator.api:app --reload --host 127.0.0.1
+make setup
+docker compose up --build -d --wait simulator crm workbench outside neo4j security-api dashboard
 ```
 
-Stop the Docker service before starting a local server on the same port. Local
-runs default to `data/helio.sqlite3`, independent of the Docker volume. Override
-the path by exporting `HELIO_DB_PATH`. Tests use temporary databases.
+Open [the dashboard](http://localhost:3000). The graph shows access paths and
+outside exposure; click a person for their CRM accounts or a case for its timeline.
+Only localhost ports are exposed. API explorers for customer services can be
+published using `compose.override.yaml.example`; the security API is on port 8002.
 
-For the model-backed investigator, MCP runtime, and paid-test limits, see
-[Phase 3 operation and validation](docs/phase3-validation.md). Normal tests do not
-make paid model calls.
+`make setup` creates and preserves credentials in the ignored, owner-only `.env`.
+Never commit or share it, or print expanded Compose configuration. Use
+`docker compose config --quiet` for validation.
 
-Runtime dependencies are pinned in `requirements.lock`; development dependencies
-are pinned in `requirements-dev.lock`. To deliberately refresh these locks:
+Configure these locally in `.env` before enabling live Slack/model calls:
+
+- `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `AWASI_SLACK_CHANNEL`, and
+  `AWASI_SLACK_DEFAULT_USER`. See [Slack setup](docs/slack-setup.md).
+- `ANTHROPIC_API_KEY` and `AWASI_MODEL` (the current demo uses `claude-haiku-5-5`).
+
+The default Slack user acts as the fictional owner, team lead, and approver in
+this single-person demo. An unmapped Slack user cannot decide a case.
+`make up` starts **all** default services, including the worker: configured keys
+can cause real model requests and Slack messages. Start it deliberately:
 
 ```sh
-.venv/bin/python -m pip install 'pip-tools>=7,<8'
-.venv/bin/pip-compile --strip-extras --output-file=requirements.lock pyproject.toml
-.venv/bin/pip-compile --strip-extras --extra=dev --constraint=requirements.lock --output-file=requirements-dev.lock pyproject.toml
+docker compose up --build -d awasi-agent
 ```
 
-## Implementation boundaries
+Normal worker operation has no dollar cap unless `AWASI_LIVE_LEDGER` is configured.
+Use the acceptance overlay below for the shared Phase 7 cap.
 
-- `src/helio_simulator/seed.py`: reproducible team and employee fixtures.
-- `src/helio_simulator/directory.py`: SQLite schema, one-time seed, and queries.
-- `src/helio_simulator/api.py`: FastAPI app factory, response models, and routes.
-- `tests/test_directory.py`: membership, filters, restart persistence, constraints,
-  and read-only API checks.
+## Three demo scenarios
 
-The directory is the authority for employment status in the company graph. The CRM is our
-own small business application, not a connection to Salesforce or another vendor.
-The graph can identify an inactive employee's agent with an active grant to
-confidential data. Revocation still requires an operator in the CRM. Automated
-investigation and approval belong to a later security-platform milestone.
+Start from fresh demo state and complete each Slack conversation before triggering
+the next scenario. Observation runs every `SECURITY_SYNC_INTERVAL` seconds (the
+local setup uses 15); `make security-sync` queues an immediate observation.
+
+| Trigger | Expected Slack conversation | Verified result |
+| --- | --- | --- |
+| `make offboard` | Maya becomes inactive. Awasi pauses the Sales Research Agent and asks Hannah whether to retire it. Choose **Retire**, then Casey approves revocation. | Agent paused, grant revoked; subsequent access denied. |
+| `make publish-app` | Renewal Tracker becomes public. If no anonymous views were observed, Luca is asked whether sharing was intentional. Choose **No, make it company-only**, then **Keep it company-only**. | App becomes company-only and its anonymous link returns 404. |
+| `make connect-enrichment` | Lead Enrichment sends six synthetic records to an unapproved outside destination. Awasi pauses it and asks Casey to decide. Choose **Remove the connection and resume**. | Connection disabled, agent resumed, both verified. Previously sent records cannot be recalled. |
+
+For public sharing, an observed anonymous view triggers immediate containment.
+`make outsider-view` simulates that access. Even the investigator's anonymous probe
+records a view; do not treat probes as passive when interpreting the timeline.
+Owner silence for 15 minutes restricts the app. **Undo restriction** restores the
+previous visibility and records a human override; the next case requires approver
+consent. Approver silence does not silently grant approval. Uncertain mutation
+outcomes go to `needs_review`, not `resolved`.
+
+Controls should stay silent: company-only Support Lookup, Renewal Digest connected
+to approved `partner-api`, and an agent whose owner is active. The Workbench is
+polled; its evidence does not yet arrive by webhook. CRM activity capture and signed
+webhook delivery are separate, opt-in evidence infrastructure.
+
+Useful inspection commands:
+
+```sh
+make security-findings
+make security-cases
+make security-connectors
+make workbench-status
+make outside-received
+make test-ui
+```
+
+## Acceptance tests and paid evaluation
+
+```sh
+make test               # Temporary databases; Neo4j checks skip without configuration
+make test-integration   # Full suite with real Neo4j on localhost:7687
+make test-ui            # Frontend behavior/layout tests
+make eval               # Explicit paid opt-in: six recorded evidence assessments
+```
+
+`tests/test_v1_acceptance.py` uses real local HTTP services, Neo4j and MCP
+subprocesses, a scripted investigator and fake Slack transport. It covers all
+three scenarios, quiet controls, durable checkpoint reopen while waiting,
+unauthorized Slack users, Undo and approver escalation, and ambiguous writes.
+These tests do not spend API credits or send channel messages.
+
+`make eval` evaluates the original model output for cause classification,
+evidence IDs and owner eligibility, plus no fix recommendation on controls.
+It uses six compact synthetic metadata fixtures, one request each, no provider
+retries. It measures assessment quality, **not** MCP tool selection or live Slack.
+Results are written to `data/phase7-evaluation.json`; an existing report prevents
+an accidental paid rerun. To deliberately rerun after a change, provide a new
+`--output` path to `PYTHONPATH=src .venv/bin/python -m helio_security.evaluation --live`.
+Keep the same ledger path so the allowance does not reset.
+
+Evaluation and the isolated live worker share `data/phase7_live_ledger.json`,
+with a cumulative ceiling of **$0.50 and 40 requests** for Phase 7. Reservations
+count against the allowance before dispatch; uncertain requests retain a
+conservative charge. Usage is a local estimate, not the provider's invoice.
+Existing historical ledgers are preserved. Do not delete a ledger to bypass its cap.
+See [model operation](docs/phase3-validation.md) for fallback and usage details.
+
+A separate clean Docker stack preserves the normal demo's volumes and history:
+
+```sh
+# Start services first. The worker is enabled separately after checking controls.
+docker compose -p awasi-acceptance -f compose.yaml -f compose.acceptance.yaml up --build -d --wait simulator crm workbench outside neo4j security-api dashboard
+docker compose -p awasi-acceptance -f compose.yaml -f compose.acceptance.yaml up --build -d awasi-agent
+```
+
+Its dashboard is [localhost:3001](http://localhost:3001), security API 18002,
+Workbench 18004 and outside receiver 18005. The overlay mounts the host usage
+ledger into the worker. Use the same Compose prefix for its commands (the ordinary
+`make` triggers target the normal demo). For example:
+
+```sh
+docker compose -p awasi-acceptance -f compose.yaml -f compose.acceptance.yaml exec -T simulator python -m helio_simulator.directory_cli emp-maya-chen inactive
+```
+
+Stop the acceptance worker after the walkthrough to end live model activity.
+Measured results and the exact manual completion status belong in the
+[Phase 7 results](docs/awasi-v1-plan.md#phase-7-results).
+
+## Stop or reset
+
+`docker compose stop` preserves state. `make demo-reset` prompts you to type
+`RESET DEMO`, then removes **all volumes in the normal Compose project** and
+starts fresh unpaid services. This erases cases, checkpoints, CRM, directory,
+Workbench, graph and optional activity history. `.env` and host usage ledgers
+are retained. It leaves the Slack/model worker stopped. It does not reset the
+separate acceptance project, and it does not delete historical Slack messages.
+
+## Architecture and development
+
+Runtime and development versions are locked in `requirements.lock` and
+`requirements-dev.lock`. Behavioral changes use tests first, then focused
+regressions and appropriate integration checks. Do not use live credentials in tests.
+
+- [V1 plan](docs/awasi-v1-plan.md), [known follow-up fixes](docs/fixes.md)
+- [Dashboard](docs/dashboard.md), [security backend](docs/backend.md), [graph](docs/graph.md)
+- [CRM](docs/crm.md), [activity processing](docs/activity-processing.md), [signed delivery](docs/activity-delivery.md)
+
+The directory owns employment status. CRM authentication, grants and principal
+validity remain enforced. Optional CRM owner/volume/failure/content controls stay
+off in this demo; removing their old implementation is Phase 8, outside this work.

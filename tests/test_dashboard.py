@@ -53,7 +53,7 @@ def test_gateway_uses_real_http_and_keeps_service_tokens_server_side(upstream):
     state = gateway.state()
     assert state["overview"]["counts"]["Employee"] == 20
     assert state["errors"] == {}
-    assert len(seen) == 7
+    assert len(seen) == 8
     assert all(row[2] == "Bearer " + viewer for row in seen)
     assert viewer not in str(state) and operator not in str(state)
     status, result = gateway.request("/sync-runs", method="POST")
@@ -148,3 +148,29 @@ def test_total_backend_failure_is_visible_and_never_exposes_exception(dashboard)
     gateway.request.side_effect = UpstreamError("unavailable")
     response = client.get("/api/findings/00000000-0000-4000-8000-000000000000")
     assert response.status_code == 503 and response.json() == {"detail": "Security API unavailable"}
+
+
+def test_case_proxy_is_read_only_validated_and_sanitizes_failure(dashboard):
+    client,gateway=dashboard
+    cid='00000000-0000-4000-8000-000000000001'
+    gateway.request.return_value=(200,{'id':cid,'events':[],'actions':[],'spans':[]})
+    assert client.get('/api/cases/'+cid).json()['id']==cid
+    gateway.request.assert_called_once_with('/cases/'+cid)
+    assert client.get('/api/cases/invalid').status_code==422
+    assert client.post('/api/cases/'+cid+'/decisions',json={}).status_code==404
+    gateway.request.side_effect=UpstreamError('private exception')
+    result=client.get('/api/cases/'+cid)
+    assert result.status_code==503 and 'private' not in result.text
+
+
+def test_state_includes_cases_and_case_outage_is_explicit(upstream,monkeypatch):
+    gateway=Gateway(upstream[0],'viewer','operator')
+    assert gateway.state()['cases']=={'items':[],'total':0}
+    original=gateway.request
+    def request(path,**kwargs):
+        if path.startswith('/cases'): raise UpstreamError('unavailable')
+        return original(path,**kwargs)
+    monkeypatch.setattr(gateway,'request',request)
+    state=gateway.state()
+    assert state['cases'] is None and state['errors']['cases']=='unavailable'
+    assert state['findings'] is not None

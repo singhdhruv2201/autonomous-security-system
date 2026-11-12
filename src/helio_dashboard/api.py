@@ -74,6 +74,10 @@ def create_app(gateway=None):
     def finding(finding_id: UUID, request: Request):
         return request.app.state.gateway.request("/findings/" + str(finding_id))[1]
 
+    @app.get("/api/cases/{case_id}")
+    def case(case_id: UUID, request: Request):
+        return request.app.state.gateway.request("/cases/" + str(case_id))[1]
+
     @app.get('/api/activity')
     def activity(request: Request, query=Depends(activity_query)):
         return request.app.state.gateway.request('/activity?'+urlencode(query))[1]

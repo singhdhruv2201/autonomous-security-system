@@ -66,11 +66,10 @@ def test_rule_evaluation_keeps_missing_evidence_unknown(graph, sources):
     assert reader.evaluate(now + 1000)["coverage_complete"] is False
 
 
-def test_cli_and_platform_rule_agree_when_agent_has_no_customer_scope(graph, sources):
+def test_rule_resolves_when_agent_has_no_customer_scope(graph, sources):
     sources[0].set_employee_status("emp-maya-chen", "inactive")
     with sources[1].connection() as db:
         db.execute("UPDATE grants SET scopes='[]' WHERE id='grant-sales-agent'")
     now = time.time()
     sync(graph, sources, now)
-    assert graph.risks(now)["findings"] == []
     assert GraphReader(graph).evaluate(now)["candidates"][0]["reason"] == "no_customer_access_scope"

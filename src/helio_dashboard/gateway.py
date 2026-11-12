@@ -59,9 +59,9 @@ class Gateway:
     def state(self):
         paths = {"overview": "/overview", "inventory": "/entities?limit=200",
                  "graph": "/graph?limit=200&edge_limit=500", "findings": "/findings?limit=200",
-                 "connectors": "/connectors", "runs": "/sync-runs?limit=12", "policies": "/policies"}
+                 "cases": "/cases?limit=200", "connectors": "/connectors", "runs": "/sync-runs?limit=12", "policies": "/policies"}
         result = {"errors": {}, "fetched_at": time.time()}
-        with ThreadPoolExecutor(max_workers=7) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             futures = {name: pool.submit(self.request, path) for name, path in paths.items()}
             for name, future in futures.items():
                 try:

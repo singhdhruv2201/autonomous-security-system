@@ -7,7 +7,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from .rules import RULE_ID
+from .rules import RULE_ID, RULES
 from .policies import Policy, policy
 
 
@@ -57,6 +57,7 @@ class PlatformStore:
                 "CREATE INDEX IF NOT EXISTS finding_company ON findings(company_id, status)",
             ]:
                 db.execute(statement)
+            db.execute("CREATE TABLE IF NOT EXISTS exceptions (company_id TEXT NOT NULL, rule TEXT NOT NULL, identity TEXT NOT NULL, approved_by TEXT NOT NULL, expires_at REAL NOT NULL, PRIMARY KEY(company_id,rule,identity))")
             db.execute("CREATE TABLE IF NOT EXISTS rule_evaluations (company_id TEXT NOT NULL, rule TEXT NOT NULL, observed_at REAL NOT NULL, PRIMARY KEY(company_id,rule))")
             db.execute("INSERT OR IGNORE INTO rule_evaluations SELECT company_id,?,observed_at FROM evaluations", (RULE_ID,))
             if next(r for r in db.execute('PRAGMA table_info(events)') if r['name']=='run_id')['notnull']:
@@ -105,7 +106,7 @@ class PlatformStore:
             for run in runs:
                 db.execute("INSERT INTO audit(company_id,actor,action,run_id,occurred_at) VALUES (?,?,'sync_interrupted',?,?)",
                            (company, run["actor"], run["id"], now))
-                for previous in list(db.execute("SELECT * FROM findings WHERE company_id=? AND rule=?", (company, RULE_ID))):
+                for previous in list(db.execute("SELECT * FROM findings WHERE company_id=? AND rule IN (" + ",".join("?" for _ in RULES) + ")", (company, *RULES))):
                     self._unverify(db, company, previous, run["id"], now, "observation_interrupted")
             db.execute("UPDATE runs SET status='interrupted',finished_at=?,error='process_restarted' WHERE company_id=? AND status='running'",
                        (now, company))
@@ -133,6 +134,10 @@ class PlatformStore:
             previous = existing.get(finding_id)
             state = candidate["state"] if evaluation["coverage_complete"] else "unknown"
             reason = candidate["reason"] if evaluation["coverage_complete"] else "incomplete_coverage"
+            exception = db.execute("SELECT expires_at FROM exceptions WHERE company_id=? AND rule=? AND identity=?",
+                                   (company, rule, finding_id)).fetchone()
+            if state == "open" and exception and exception[0] > now:
+                state, reason = "resolved", "exception_active"
             if state == "unknown":
                 if previous:
                     self._unverify(db, company, previous, run_id, now, reason)
@@ -186,13 +191,43 @@ class PlatformStore:
                 error = "observation_failed"
             if evaluation is None:
                 evaluation = {"coverage_complete": False, "observed_at": now, "candidates": [], "sources": {}}
-            self._reconcile(db, company, run_id, evaluation, now)
-            state = "failed" if error else ("succeeded" if evaluation["coverage_complete"] and
-                    all(source_results.get(s) == "ok" for s in ("directory", "crm")) else "partial")
+            evaluations = evaluation.get("evaluations", [evaluation])
+            if error:
+                evaluations = [{"rule": r, "coverage_complete": False, "observed_at": now,
+                                "candidates": [], "sources": {}} for r in RULES]
+            for result in evaluations:
+                self._reconcile(db, company, run_id, result, now)
+            required = set().union(*(set(policy(e.get("rule", RULE_ID)).sources) for e in evaluations))
+            state = "failed" if error else ("succeeded" if all(e["coverage_complete"] for e in evaluations) and
+                    all(source_results.get(s) == "ok" for s in required) else "partial")
             db.execute("UPDATE runs SET status=?,finished_at=?,source_results=?,error=? WHERE id=?",
                        (state, now, json.dumps(source_results), error, run_id))
             db.execute("INSERT INTO audit(company_id,actor,action,run_id,occurred_at) VALUES (?,?,'sync_finished',?,?)",
                        (company, run["actor"], run_id, now))
+
+    def exception_active(self, company, rule, identity, now):
+        finding_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps([company, rule, *identity])))
+        with self.connection() as db:
+            row = db.execute("SELECT expires_at FROM exceptions WHERE company_id=? AND rule=? AND identity=?",
+                             (company, rule, finding_id)).fetchone()
+            return bool(row and row[0] > now)
+
+    def approve_exception(self, company, finding_id, approved_by, *, expires_at, now):
+        if not approved_by or expires_at <= now or expires_at > now + 7 * 86400:
+            raise ValueError("Invalid exception expiry or approver")
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            finding = db.execute("SELECT * FROM findings WHERE company_id=? AND id=?", (company, finding_id)).fetchone()
+            if not finding or finding["rule"] not in {"public_app_confidential_data", "agent_unapproved_destination"}:
+                raise ValueError("Finding cannot be excepted")
+            existing = db.execute("SELECT expires_at FROM exceptions WHERE company_id=? AND rule=? AND identity=?",
+                                  (company, finding["rule"], finding_id)).fetchone()
+            if existing and existing[0] > now:
+                return  # Replay must not extend an approval's original expiry.
+            db.execute("INSERT OR REPLACE INTO exceptions VALUES (?,?,?,?,?)",
+                       (company, finding["rule"], finding_id, approved_by, expires_at))
+            db.execute("UPDATE findings SET status='resolved',reason='exception_active',resolved_at=? WHERE id=?", (now, finding_id))
+            self._event(db, company, finding_id, "resolved", now, None, "exception_active")
 
     @staticmethod
     def _finding(row, now):

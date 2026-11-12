@@ -80,6 +80,42 @@ class CRMInventory(Envelope):
     grants: list[Grant]
 
 
+class WorkbenchAsset(Named):
+    owner_employee_id: ID
+    crm_principal_id: ID
+    crm_principal_kind: Literal["agent", "service"]
+    version: int = Field(ge=1)
+
+
+class WorkbenchApp(WorkbenchAsset):
+    built_with: Text
+    visibility: Literal["private", "company", "public"]
+    slug: ID
+    anonymous_views_1h: int = Field(ge=0)
+    last_anonymous_view_at: Text | None = None
+
+
+class WorkbenchDestination(Record):
+    host: ID
+    enabled: bool
+    version: int = Field(ge=1)
+    last_sent_at: Text | None = None
+    records_sent_1h: int = Field(ge=0)
+    records_sent_total: int = Field(ge=0)
+
+
+class WorkbenchAgent(WorkbenchAsset):
+    status: Literal["active", "paused"]
+    destinations: list[WorkbenchDestination]
+
+
+class WorkbenchInventory(Envelope):
+    # The workbench v1 API emits the version as a string.
+    schema_version: Literal[1, "1"]
+    apps: list[WorkbenchApp]
+    agents: list[WorkbenchAgent]
+
+
 @dataclass
 class Snapshot:
     source: str
@@ -141,6 +177,36 @@ def normalize(source, payload):
             node("AccessGrant", grant)
             edge("HAS_GRANT", kinds[account.kind], account.id, "AccessGrant", grant.id)
             edge("ON", "AccessGrant", grant.id, "DataResource", grant.resource_id)
+    elif source == "workbench":
+        import json
+        data = WorkbenchInventory.model_validate(payload)
+        indexed(data.apps)
+        indexed(data.agents)
+        destinations = set()
+        for asset in [*data.apps, *data.agents]:
+            kind = "App" if isinstance(asset, WorkbenchApp) else "Agent"
+            node(kind, asset, exclude=("destinations",))
+            edge("OWNS", "Employee", asset.owner_employee_id, kind, asset.id)
+            principal_kind = "Agent" if asset.crm_principal_kind == "agent" else "ServiceAccount"
+            edge("ACTS_AS", kind, asset.id, principal_kind, asset.crm_principal_id)
+            if kind == "App" and asset.visibility == "public":
+                edge("EXPOSED_TO", kind, asset.id, "Audience", "public")
+            if kind == "Agent":
+                hosts = set()
+                for dest in asset.destinations:
+                    if dest.host in hosts:
+                        raise ValueError("Duplicate destination")
+                    hosts.add(dest.host)
+                    # Composite source ID cannot collide across agents or hosts.
+                    identifier = json.dumps([asset.id, dest.host], separators=(",", ":"))
+                    nodes.append({"kind": "Connection", "id": identifier,
+                                  "properties": {"id": identifier, **dest.model_dump()}})
+                    edge("HAS_CONNECTION", kind, asset.id, "Connection", identifier)
+                    edge("TO", "Connection", identifier, "Destination", dest.host)
+                    destinations.add(dest.host)
+        nodes.append({"kind": "Audience", "id": "public", "properties": {"id": "public", "name": "Public"}})
+        for host in sorted(destinations):
+            nodes.append({"kind": "Destination", "id": host, "properties": {"id": host, "host": host}})
     else:
         raise ValueError("Unknown source")
     return Snapshot(source, nodes, edges)

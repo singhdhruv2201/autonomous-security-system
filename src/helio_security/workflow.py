@@ -25,6 +25,8 @@ from langgraph.types import interrupt
 from .cases import CaseStore
 from .decision import Facts, decide
 from .actions import call_playbook, dispatch
+from . import workbench_workflow
+from .workbench_workflow import facts_from_finding
 
 
 class WorkflowState(TypedDict, total=False):
@@ -58,6 +60,9 @@ class WorkflowDeps:
     action_token: Optional[str] = None
     observer_token: Optional[str] = None
     verify_timeout_seconds: float = 0.0
+    workbench_url: Optional[str] = None
+    workbench_observer_token: Optional[str] = None
+    workbench_action_token: Optional[str] = None
 
 
 def build_graph(deps: WorkflowDeps):
@@ -78,22 +83,7 @@ def build_graph(deps: WorkflowDeps):
             company = state.get("company_id", deps.company_id)
             finding = deps.platform_store.finding(company, state.get("finding_id"))
             if finding:
-                evidence = finding.get("evidence", {})
-                facts_dict = {
-                    "rule": finding.get("rule", "inactive_owner_agent_access"),
-                    "target_kind": "agent",
-                    "owner_status": evidence.get("employee_status", "inactive"),
-                    "data_classification": evidence.get("classification", "confidential"),
-                    "record_count": evidence.get("record_count", 0),
-                    "exposure": "none",
-                    "leaking_now": False,
-                    "dependents": 0,
-                    "human_override": False,
-                    "has_lead": True,
-                    "addressed_to": "emp-hannah-reed",
-                    "agent_id": evidence.get("agent_id", "agent:sales-research"),
-                    "grant_id": evidence.get("grant_id"),
-                }
+                facts_dict = facts_from_finding(finding)
 
         if not facts_dict:
             facts_dict = {
@@ -191,6 +181,8 @@ def build_graph(deps: WorkflowDeps):
         return "report"
 
     def action_target(state):
+        if workbench_workflow.is_workbench(state):
+            return workbench_workflow.target_for(state)
         facts = state.get("facts", {})
         if state.get("decision", {}).get("playbook") == "crm.revoke_grant":
             return facts.get("grant_id")
@@ -291,6 +283,8 @@ def build_graph(deps: WorkflowDeps):
 
     async def notify_human(state: WorkflowState, config: RunnableConfig):
         case_id = _get_case_id(state, config)
+        if workbench_workflow.is_workbench(state):
+            return await workbench_workflow.notify(deps, case_id, state)
         d = state.get("decision", {})
         facts = state.get("facts", {})
         followup = d.get("followup")
@@ -337,6 +331,8 @@ def build_graph(deps: WorkflowDeps):
         update = {"processed_decisions": processed, "next_step": "report"}
         deps.store.add_event(case_id, key=f"human_decision:{answer.get('id') or question.get('key')}:{choice}",
             type="decision", actor=employee or "operator", text=f"Decision recorded: {choice} by {employee}", now=deps.clock())
+        if workbench_workflow.is_workbench(state):
+            return await workbench_workflow.process(deps, case_id, state, update)
         authorized = employee in ("operator", question.get("addressed_to"))
         valid_key = answer.get("key", question.get("key")) == question.get("key")
         if not authorized or not valid_key or choice not in question.get("choices", []):
@@ -392,7 +388,7 @@ def build_graph(deps: WorkflowDeps):
         )
         if hasattr(deps.notifier, "notify"):
             final_case = deps.store.get_case(case_id)
-            payload = {"status": final_case["status"] if final_case else "resolved", "decision": state.get("decision", {})}
+            payload = {"status": final_case["status"] if final_case else "resolved", "decision": state.get("decision", {}), "facts": state.get("facts", {}), "human_choice": state.get("human_input", {}).get("choice")}
             result = deps.notifier.notify(case_id, "outcome", payload)
             if inspect.isawaitable(result):
                 await result

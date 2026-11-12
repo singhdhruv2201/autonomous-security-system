@@ -13,17 +13,21 @@ class SlackStore:
                 status TEXT NOT NULL DEFAULT 'queued', retry_at REAL NOT NULL DEFAULT 0,
                 UNIQUE(case_id,key))''')
 
+            if 'payload' not in {r['name'] for r in db.execute('PRAGMA table_info(slack_messages)')}:
+                db.execute("ALTER TABLE slack_messages ADD COLUMN payload TEXT")
+
     def recover(self):
         with self.cases.connection() as db:
             db.execute("UPDATE slack_messages SET status=CASE WHEN ts IS NULL THEN 'unknown' ELSE 'queued' END WHERE status='sending'")
 
-    def enqueue(self, case_id, key, channel, body):
+    def enqueue(self, case_id, key, channel, body, payload=None):
         encoded = json.dumps(body, sort_keys=True)
+        context = json.dumps(payload, sort_keys=True) if payload is not None else None
         with self.cases.connection() as db:
-            db.execute('''INSERT INTO slack_messages(case_id,key,channel,body) VALUES (?,?,?,?)
-                ON CONFLICT(case_id,key) DO UPDATE SET body=excluded.body,revision=revision+1,
+            db.execute('''INSERT INTO slack_messages(case_id,key,channel,body,payload) VALUES (?,?,?,?,?)
+                ON CONFLICT(case_id,key) DO UPDATE SET body=excluded.body,payload=coalesce(excluded.payload,slack_messages.payload),revision=revision+1,
                 status=CASE WHEN slack_messages.status IN ('unknown','sending') THEN slack_messages.status ELSE 'queued' END,
-                retry_at=0 WHERE slack_messages.body != excluded.body''', (case_id, key, channel, encoded))
+                retry_at=0 WHERE slack_messages.body != excluded.body OR (excluded.payload IS NOT NULL AND coalesce(slack_messages.payload,'') != excluded.payload)''', (case_id, key, channel, encoded, context))
 
     def message(self, case_id, key):
         with self.cases.connection() as db:

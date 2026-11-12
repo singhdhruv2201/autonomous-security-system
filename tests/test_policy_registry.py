@@ -9,9 +9,9 @@ from helio_security.rules import RULE_ID
 from test_platform_store import evaluation, finish
 
 
-def test_registry_contains_only_the_versioned_inactive_owner_rule():
+def test_registry_contains_three_versioned_posture_rules():
     from helio_security.policies import POLICIES
-    assert set(POLICIES) == {RULE_ID}
+    assert set(POLICIES) == {RULE_ID, "public_app_confidential_data", "agent_unapproved_destination"}
     assert POLICIES[RULE_ID].enabled is True
     assert POLICIES[RULE_ID].version == 1
     assert POLICIES[RULE_ID].lifecycle == 'posture'

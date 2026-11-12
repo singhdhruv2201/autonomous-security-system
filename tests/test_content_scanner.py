@@ -23,5 +23,5 @@ def test_oversize_timeout_and_unicode_normalization():
     assert scan('x'*101,max_bytes=100)['status']=='unknown'
     ticks=iter([0,1])
     assert scan('ordinary',clock=lambda:next(ticks),timeout_ms=1)['status']=='unknown'
-    assert scan('ＡＫＩＡ'+'Ａ'*16)['detectors']==['aws_key']
-    assert scan('a'*65536)['status']=='passed'
+    assert scan('ＡＫＩＡ'+'Ａ'*16,clock=lambda:0)['detectors']==['aws_key']
+    assert scan('a'*65536,clock=lambda:0)['status']=='passed'

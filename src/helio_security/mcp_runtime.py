@@ -17,8 +17,8 @@ async def mcp_connections():
         diagnostics = stack.enter_context(open(os.devnull, "w"))
         adapters = []
         for filename, names in (
-            ("mcp_read.py", ("SECURITY_API_URL", "SECURITY_VIEWER_TOKEN", "HELIO_COMPANY_ID")),
-            ("mcp_actions.py", ("CRM_URL", "CRM_ACTION_TOKEN", "CRM_OBSERVER_TOKEN")),
+            ("mcp_read.py", ("SECURITY_API_URL", "SECURITY_VIEWER_TOKEN", "HELIO_COMPANY_ID", "WORKBENCH_URL", "WORKBENCH_OBSERVER_TOKEN")),
+            ("mcp_actions.py", ("CRM_URL", "CRM_ACTION_TOKEN", "CRM_OBSERVER_TOKEN", "WORKBENCH_URL", "WORKBENCH_OBSERVER_TOKEN", "WORKBENCH_ACTION_TOKEN")),
         ):
             environment = {name: os.environ[name] for name in names if name in os.environ}
             environment["PYTHONPATH"] = str(root.parent)

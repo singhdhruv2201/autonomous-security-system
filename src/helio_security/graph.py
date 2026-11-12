@@ -5,9 +5,11 @@ import time
 from collections import defaultdict
 
 NODE_KINDS = {"directory": {"Employee", "Team"},
-              "crm": {"App", "Agent", "ServiceAccount", "AppAccount", "DataResource", "AccessGrant"}}
+              "crm": {"App", "Agent", "ServiceAccount", "AppAccount", "DataResource", "AccessGrant"},
+              "workbench": {"App", "Agent", "Connection", "Destination", "Audience"}}
 EDGE_KINDS = {"directory": {"MEMBER_OF"},
-              "crm": {"OWNS", "USES", "STORES", "IDENTITY_OF", "HAS_GRANT", "ON"}}
+              "crm": {"OWNS", "USES", "STORES", "IDENTITY_OF", "HAS_GRANT", "ON"},
+              "workbench": {"OWNS", "ACTS_AS", "EXPOSED_TO", "HAS_CONNECTION", "TO"}}
 
 
 class GraphStore:
@@ -117,21 +119,3 @@ class GraphStore:
         return {"company_id": self.company_id, "sources": sources,
                 "counts": {r["kind"]: r["count"] for r in counts},
                 "coverage_complete": all(s["fresh"] for s in sources.values())}
-
-    def risks(self, now=None):
-        # This single rule demonstrates graph value; it is not an exhaustive assessment.
-        status = self.status(now)
-        rows = self.driver.execute_query("""
-            MATCH p=(e:Employee {company_id:$company,status:'inactive'})-[:OWNS]->(a:Agent)
-                -[:HAS_GRANT]->(g:AccessGrant {status:'active'})-[:ON]->(d:DataResource)
-            WHERE d.classification='confidential'
-                AND any(scope IN g.scopes WHERE scope IN ['customers:read','customers:write'])
-                AND all(n IN nodes(p) WHERE n.present=true AND n.company_id=$company)
-                AND all(r IN relationships(p) WHERE r.present=true)
-            RETURN e.id AS employee_id, e.name AS employee_name, a.id AS agent_id,
-                g.id AS grant_id, g.scopes AS scopes, d.id AS resource_id,
-                e.last_observed_at AS directory_observed_at, g.last_observed_at AS crm_observed_at
-            ORDER BY employee_id, agent_id, grant_id""", company=self.company_id, database_="neo4j").records
-        return {"company_id": self.company_id, "coverage_complete": status["coverage_complete"],
-                "rule": "inactive_owner_agent_access", "sources": status["sources"],
-                "findings": [{**dict(r), "evidence_fresh": status["coverage_complete"]} for r in rows]}

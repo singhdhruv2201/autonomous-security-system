@@ -62,3 +62,10 @@ workbench-status:
 
 outside-received:
 	docker compose exec -T outside python -m outside.cli
+
+.PHONY: eval demo-reset
+eval:
+	PYTHONPATH=src .venv/bin/python -m helio_security.evaluation --live
+
+demo-reset:
+	PYTHONPATH=src .venv/bin/python -m helio_security.demo_reset

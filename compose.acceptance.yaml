@@ -1,0 +1,20 @@
+# Separate volumes/networks and ports; preserves the normal demo.
+# Always use: docker compose -p awasi-acceptance -f compose.yaml -f compose.acceptance.yaml ...
+services:
+  neo4j:
+    ports: !reset []
+  security-api:
+    ports: !override ["127.0.0.1:18002:8002"]
+  dashboard:
+    ports: !override ["127.0.0.1:3001:3000"]
+  workbench:
+    ports: !override ["127.0.0.1:18004:8004"]
+  outside:
+    ports: !override ["127.0.0.1:18005:8005"]
+  awasi-agent:
+    environment:
+      AWASI_LIVE_LEDGER: /budget/phase7_live_ledger.json
+      AWASI_LIVE_MAX_SPEND_USD: "0.50"
+      AWASI_LIVE_MAX_REQUESTS: "40"
+    volumes:
+      - ./data:/budget

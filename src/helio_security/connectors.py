@@ -19,12 +19,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def fetch_snapshot(source, base_url, observer_token=None):
-    if source not in {"directory", "crm"}:
+    if source not in {"directory", "crm", "workbench"}:
         raise ConnectorError("unknown_source")
-    if source == "crm" and not observer_token:
+    if source != "directory" and not observer_token:
         raise ConnectorError("missing_credential")
     path = "/snapshot" if source == "directory" else "/inventory"
-    headers = {"Authorization": f"Bearer {observer_token}"} if source == "crm" else {}
+    headers = {"Authorization": f"Bearer {observer_token}"} if source != "directory" else {}
     request = urllib.request.Request(base_url.rstrip("/") + path, headers=headers)
     try:
         with urllib.request.build_opener(NoRedirect).open(request, timeout=5) as response:

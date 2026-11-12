@@ -332,7 +332,7 @@ def test_lead_copy_requires_a_current_verified_pause(setup, status, verified):
         assert 'not been verified' in text
         assert 'disabled' not in text
     else:
-        assert 'disabled' in text and 'verified' in text
+        assert 'paused' in text and 'verified' in text
 
 
 def test_refreshed_lead_message_does_not_describe_undo_as_current_pause(setup):
@@ -371,7 +371,7 @@ def test_unverified_undo_does_not_claim_access_is_disabled_or_restored(setup, un
     assert 'restored' not in text
 
 
-def test_lead_message_renders_investigation_summary(setup):
+def test_lead_message_keeps_technical_investigation_in_case(setup):
     store, cid, _, _, notifier, question = setup
     now = time.time()
     store.save_investigation(
@@ -390,11 +390,10 @@ def test_lead_message_renders_investigation_summary(setup):
     )
     rendered = notifier.render_body(cid, "lead_decision", question)
     text = rendered["text"]
-    assert "retained customer database access without active human supervisor" in text
-    assert "Likely cause: Owner offboarded without credential deprovisioning" in text
-    assert "confidence: high" in text
-    assert "evidence count: 2" in text
-    assert "Should we decommission this agent?" in text
+    assert "Maya Chen" in text and "Sales Research Agent" in text
+    assert "Likely cause:" not in text and "evidence count:" not in text
+    assert "Should we decommission this agent?" not in text
+    assert store.get_investigation(cid)["summary"].startswith("Agent sales-research")
 
 
 def test_lead_message_escapes_slack_markup(setup):
@@ -418,8 +417,6 @@ def test_lead_message_escapes_slack_markup(setup):
     )
     rendered = notifier.render_body(cid, "lead_decision", question)
     text = rendered["text"]
-    assert "&lt;internal&gt;" in text
-    assert "&amp;" in text
-    assert "&lt;agent&gt;" in text
+    assert "Agent accessed" not in text
     assert "<internal>" not in text
     assert "<agent>" not in text

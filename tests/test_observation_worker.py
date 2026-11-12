@@ -24,7 +24,7 @@ def test_worker_observes_and_atomically_records_findings_and_run(worker):
     assert worker.run_once() is True
     assert worker.store.run("helio", run["id"])["status"] == "succeeded"
     assert worker.store.findings("helio", now=100)["total"] == 1
-    worker.sync.assert_called_once_with(worker.graph, "http://directory", "http://crm", "observer-only")
+    worker.sync.assert_called_once_with(worker.graph, [("directory", "http://directory", None), ("crm", "http://crm", "observer-only")])
     assert worker.run_once() is False
 
 

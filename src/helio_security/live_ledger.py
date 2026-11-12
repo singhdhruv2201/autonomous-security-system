@@ -167,3 +167,15 @@ class LiveLedger:
             data["runs"].append(entry)
             self._save(data)
             return entry
+
+
+def configured_ledger():
+    """Use one durable allowance for an explicitly configured live worker."""
+    path = os.getenv('AWASI_LIVE_LEDGER')
+    if not path:
+        return None
+    spend = float(os.getenv('AWASI_LIVE_MAX_SPEND_USD', '1.0'))
+    requests = int(os.getenv('AWASI_LIVE_MAX_REQUESTS', '10'))
+    if not math.isfinite(spend) or spend <= 0 or requests <= 0:
+        raise ValueError('Live allowance must be positive and finite')
+    return LiveLedger(path, max_spend_usd=spend, max_requests=requests)

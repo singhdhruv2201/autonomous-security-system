@@ -139,3 +139,29 @@ Run tests with fake Slack clients:
 ```
 This tests thread grouping, role mapping, authorization, idempotency, button updates,
 SQLite checkpoint recovery, and startup outages without contacting Slack.
+
+## 8. Notification wording
+
+Slack notifications use deterministic templates with human-readable names. They
+separate what happened, what Awasi verified, and the decision being requested into
+short sections. Model summaries, cause codes, evidence IDs, grant IDs and raw HTTP
+errors stay in the case investigation rather than being pasted into the channel.
+Anthropic still investigates the case; it does not compose these notifications.
+
+For example, an inactive-owner notification explains that Maya is marked inactive,
+her Sales Research Agent could still read six customers' CRM data, and Awasi has
+verified its pause. It then asks whether Sales still needs the agent and explains
+the choices. A requested change is not described as completed until verified.
+
+The outbox saves the original notification context alongside the rendered body.
+Button callbacks and later updates retain the same asset, recipient and counts,
+even after the workflow moves to a different question or the worker restarts.
+Existing outboxes get an additive `payload` column; older Workbench notifications
+can recover context from their persisted question event. Completed questions lose
+buttons, repeated questions and response-deadline reminders. Decision labels use
+phrases such as “Remove the connection and resume”, not internal choice codes.
+
+These changes take effect when the updated worker renders notifications. Existing
+Slack messages are not automatically rewritten by a code update. Tests use fake
+Slack transport and real SQLite/HTTP/Neo4j boundaries; no paid model requests are
+needed to validate notification wording.

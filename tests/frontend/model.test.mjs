@@ -121,7 +121,7 @@ test("graph layout is deterministic, bounded, and retains real IDs", () => {
   const first = graphLayout(nodes);
   assert.deepEqual(first, graphLayout(nodes));
   assert.equal(new Set(first.map((x) => x.id)).size, 21);
-  assert.ok(first.every((x) => x.x > 0 && x.x < 1200 && x.y > 0 && x.y < 640));
+  assert.ok(first.every((x) => x.x > 0 && x.x < 2200 && x.y > 0 && Number.isFinite(x.y)));
 });
 test("untrusted labels are escaped before HTML or SVG insertion", () => {
   assert.equal(

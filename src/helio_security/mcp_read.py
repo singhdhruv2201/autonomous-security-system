@@ -101,6 +101,9 @@ EVIDENCE_FIELDS = frozenset("""
     items nodes edges start end properties source total limit offset truncated found
     unavailable error event_count lifecycle stream stages route duration_ms response_bytes
     prepared_record_count requested_limit response_check scan_status enabled
+    workbench app_id subject_id connection_id asset_name visibility slug agent_status host
+    anonymous_views_1h last_anonymous_view_at records_sent_1h records_sent_total last_sent_at
+    workbench_observed_at connection_version dependents fields bytes_count has_more
     completion release_decision serialized_bytes emitted_bytes snapshot next_before
 """.split())
 
@@ -135,7 +138,7 @@ def _get_api_config():
     return api_url, headers
 
 
-async def _fetch_bounded(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> Dict[str, Any]:
+async def _fetch_bounded(client: httpx.AsyncClient, url: str, headers: Dict[str, str], *, allow_list=False) -> Any:
     """Fetch response with an explicit byte ceiling before fully buffering/parsing."""
     async with client.stream("GET", url, headers=headers) as resp:
         if resp.status_code == 404:
@@ -149,11 +152,24 @@ async def _fetch_bounded(client: httpx.AsyncClient, url: str, headers: Dict[str,
             body.extend(chunk)
         try:
             result = json.loads(body)
-            if not isinstance(result, dict):
+            if not isinstance(result, dict) and not (allow_list and isinstance(result, list)):
                 raise ValueError()
             return result
         except (ValueError, RecursionError):
             return {"unavailable": True, "error": "invalid_json"}
+
+
+def _entity_candidates(identifier):
+    from helio_security.reader import entity_id as encode_entity_id
+    company = os.getenv("HELIO_COMPANY_ID", "helio")
+    prefixes = {"agent:":"Agent", "agent-":"Agent", "app-":"App", "service:":"ServiceAccount",
+                "emp-":"Employee", "grant-":"AccessGrant", "resource-":"DataResource"}
+    candidates = [identifier]
+    for prefix, kind in prefixes.items():
+        if identifier.startswith(prefix):
+            candidates.append(encode_entity_id(json.dumps([company,kind,identifier],separators=(",",":"))))
+            break
+    return candidates
 
 
 @read_server.tool(
@@ -182,22 +198,7 @@ async def get_entity(entity_id: str) -> Dict[str, Any]:
     """Retrieve an entity node from the company graph by ID (read-only)."""
     vid = validate_id(entity_id)
     api_url, headers = _get_api_config()
-    company_id = os.getenv("HELIO_COMPANY_ID", "helio")
-
-    candidate_ids = [vid]
-    if ":" in vid or vid.startswith("emp-") or vid.startswith("grant-") or vid.startswith("resource-"):
-        try:
-            from helio_security.reader import entity_id as encode_entity_id
-            if vid.startswith("agent:"):
-                candidate_ids.append(encode_entity_id(json.dumps([company_id, "Agent", vid], separators=(",", ":"))))
-            elif vid.startswith("emp-"):
-                candidate_ids.append(encode_entity_id(json.dumps([company_id, "Employee", vid], separators=(",", ":"))))
-            elif vid.startswith("grant-"):
-                candidate_ids.append(encode_entity_id(json.dumps([company_id, "AccessGrant", vid], separators=(",", ":"))))
-            elif vid.startswith("resource-"):
-                candidate_ids.append(encode_entity_id(json.dumps([company_id, "DataResource", vid], separators=(",", ":"))))
-        except Exception:
-            pass
+    candidate_ids = _entity_candidates(vid)
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -218,18 +219,7 @@ async def get_neighbors(entity_id: str) -> Dict[str, Any]:
     """Retrieve graph relationships and neighbors for an entity (read-only)."""
     vid = validate_id(entity_id)
     api_url, headers = _get_api_config()
-    company_id = os.getenv("HELIO_COMPANY_ID", "helio")
-
-    candidate_ids = [vid]
-    if ":" in vid or vid.startswith("emp-") or vid.startswith("grant-") or vid.startswith("resource-"):
-        try:
-            from helio_security.reader import entity_id as encode_entity_id
-            if vid.startswith("agent:"):
-                candidate_ids.append(encode_entity_id(json.dumps([company_id, "Agent", vid], separators=(",", ":"))))
-            elif vid.startswith("emp-"):
-                candidate_ids.append(encode_entity_id(json.dumps([company_id, "Employee", vid], separators=(",", ":"))))
-        except Exception:
-            pass
+    candidate_ids = _entity_candidates(vid)
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -259,6 +249,56 @@ async def get_crm_activity(actor_id: str, limit: int = 10) -> Dict[str, Any]:
             return project_evidence(data)
     except Exception as e:
         return {"unavailable": True, "error": e.__class__.__name__}
+
+
+def _workbench_config():
+    return os.getenv("WORKBENCH_URL", "http://127.0.0.1:8004").rstrip("/"), {
+        "Authorization":"Bearer "+os.getenv("WORKBENCH_OBSERVER_TOKEN", "")}
+
+
+@read_server.tool(tags=["read_only"], annotations=ToolAnnotations(read_only_hint=True))
+async def get_workbench_events(subject_id: str, limit: int = 10) -> dict:
+    """Read bounded workbench event metadata. A partial history is marked truncated."""
+    subject, count = validate_id(subject_id), validate_limit(limit)
+    url, headers = _workbench_config()
+    items, after, more = [], 0, True
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            for _ in range(5):
+                data = await _fetch_bounded(client, f"{url}/events?after={after}&limit=100", headers)
+                if data.get("error"): return data
+                page = data.get("items", [])
+                items.extend(e for e in page if e.get("subject_id") == subject)
+                more = data.get("has_more", False)
+                if not more or not page: break
+                after = page[-1]["id"]
+        return {"items":project_evidence({"items":items[-count:]})["items"],
+                "truncated":bool(more or len(items)>count)}
+    except Exception:
+        return {"unavailable":True, "error":"workbench_unavailable"}
+
+
+@read_server.tool(tags=["read_only"], annotations=ToolAnnotations(read_only_hint=True))
+async def probe_public_app(app_id: str) -> dict:
+    """Anonymous probe of an inventory app. Returns metadata only; a successful probe records an anonymous view."""
+    identifier = validate_id(app_id)
+    url, headers = _workbench_config()
+    try:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
+            inventory = await _fetch_bounded(client, url+"/inventory", headers)
+            if inventory.get("error"): return inventory
+            app = next((a for a in inventory.get("apps", []) if a["id"] == identifier), None)
+            if not app: return {"found":False}
+            data = await _fetch_bounded(client, url+"/public/"+quote(app["slug"],safe=""), {}, allow_list=True)
+            if isinstance(data, dict) and data.get("error"):
+                return {"status_code":404, "record_count":0, "fields":[]} if data["error"] == "not_found" else data
+            if not isinstance(data, list) or any(not isinstance(r, dict) for r in data):
+                return {"unavailable":True, "error":"invalid_public_response"}
+            allowed = {"id","name","contact_email","email","plan","subscription_status"}
+            return {"status_code":200, "record_count":len(data),
+                    "fields":sorted({k for row in data for k in row if k in allowed})}
+    except Exception:
+        return {"unavailable":True, "error":"workbench_unavailable"}
 
 
 if __name__ == "__main__":

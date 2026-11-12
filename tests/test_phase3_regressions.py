@@ -310,8 +310,8 @@ def test_worker_cancellation_closes_both_mcp_sessions(monkeypatch):
         class Worker:
             deps=SimpleNamespace(investigator=ModelInvestigator(tools=[]),playbooks={})
             async def run_forever(self):
-                assert len(self.deps.investigator._tools)==4
-                assert set(self.deps.playbooks)=={'crm.pause_principal','crm.revoke_grant'}
+                assert len(self.deps.investigator._tools)==6
+                assert set(self.deps.playbooks)=={'crm.pause_principal','crm.revoke_grant','workbench.restrict_app','workbench.pause_agent','workbench.disable_destination'}
                 started.set()
                 await asyncio.Event().wait()
         task=asyncio.create_task(run_with_mcp(Worker()))

@@ -30,11 +30,14 @@ except ImportError:
     SlackApiError = None
 
 from .cases import CaseStore
+from . import workbench_messages
 from .slack_store import SlackStore
 
 log = logging.getLogger(__name__)
 
 EMPLOYEE_DIRECTORY = {
+    "emp-luca-rossi": {"name":"Luca Rossi", "title":"Account Executive"},
+    "emp-zara-ali": {"name":"Zara Ali", "title":"Sales Operations"},
     "emp-hannah-reed": {"name": "Hannah Reed", "title": "Sales Lead"},
     "emp-casey-wong": {"name": "Casey Wong", "title": "CTO"},
     "emp-maya-chen": {"name": "Maya Chen", "title": "Account Executive"},
@@ -123,6 +126,13 @@ class SlackNotifier:
         return self.slack_store.status()
 
     def render_body(self, case_id: str, key: str, payload: dict) -> dict:
+        saved = self.slack_store.message(case_id, key)
+        if saved and saved.get("payload"):
+            payload = {**json.loads(saved["payload"]), **payload}
+        else:
+            original = next((e['data'] for e in self.cases.get_events(case_id)
+                             if e['key'] == 'question:' + key), {})
+            payload = {**original, **payload}
         facts = payload.get("facts", {})
         record_count = facts.get("record_count", 6)
         addressed_to = payload.get("addressed_to", "emp-hannah-reed")
@@ -139,7 +149,10 @@ class SlackNotifier:
 
         decision = self.cases.decision(case_id, key)
 
-        if key == "lead_decision":
+        workbench = facts.get("rule") in ("public_app_confidential_data", "agent_unapproved_destination")
+        if workbench:
+            body_text = workbench_messages.message(key, payload, actions, self.cases.get_case(case_id), format_role, escape_slack_text)
+        elif key == "lead_decision":
             header_target = format_role(addressed_to)
             mention = f" <@{self.config.default_user}>" if is_root and self.config.default_user else ""
             header = f"To: {header_target}{mention}"
@@ -150,22 +163,16 @@ class SlackNotifier:
             elif undo:
                 action_text = "Undo was attempted; current CRM access has not been verified."
             elif has_verified_pause:
-                action_text = "I paused its CRM access. Last verified CRM state: disabled."
+                action_text = "I paused its CRM access and verified the pause."
             else:
                 action_text = "A pause of CRM access has not been verified."
-            inv = self.cases.get_investigation(case_id) if hasattr(self.cases, "get_investigation") else None
-            if inv and inv.get("summary"):
-                summary_text = escape_slack_text(inv["summary"])
-                evidence_count = len(inv.get("evidence_refs", []))
-                cause_text = f" Likely cause: {inv['likely_cause']} (confidence: {inv.get('confidence', 'medium')}, evidence count: {evidence_count})." if inv.get("likely_cause") else ""
-                owner_q = escape_slack_text(inv.get("question_for_owner") or "Does Sales still need it?")
-                body_text = f"{header}\n{summary_text}{cause_text} {action_text} {owner_q}"
-            else:
-                body_text = (
-                    f"{header}\nMaya Chen's Sales Research Agent retained customer database access "
-                    f"({record_count} customers) after its owner became inactive. {action_text} "
-                    "Dependency impact has not been independently verified. Does Sales still need it?"
-                )
+            body_text = (
+                f"{header}\n\n*An agent still had access after its owner became inactive*\n"
+                f"Maya Chen is marked inactive, but her Sales Research Agent could still read CRM data for {record_count} customers.\n\n"
+                f"*What Awasi did*\n{action_text}\n\n"
+                "*Your decision*\nDoes Sales still need this agent? Retire it to request permanent access removal, "
+                "keep it while a new owner is assigned, or undo the pause to restore access."
+            )
         elif key.startswith("approve:"):
             header_target = format_role(addressed_to)
             header = f"To: {header_target}"
@@ -178,16 +185,16 @@ class SlackNotifier:
                 requester_line = ""
 
             if "pause" in target_playbook:
-                action_desc = f"Please approve pause of Sales Research Agent CRM access on the customer database ({record_count} customers)."
+                action_desc = f"Approve a pause of CRM access to stop the Sales Research Agent from reading customer data ({record_count} customers)."
             elif "revoke" in target_playbook:
                 if requester_line:
-                    action_desc = f"Please approve revoking its CRM grant on the customer database ({record_count} customers)."
+                    action_desc = f"Please approve permanently revoking its permission to read customer data ({record_count} customers)."
                 else:
-                    action_desc = f"Please approve revoking the Sales Research Agent CRM grant on the customer database ({record_count} customers)."
+                    action_desc = f"Please approve permanently revoking the Sales Research Agent’s permission to read customer data ({record_count} customers)."
             else:
-                action_desc = f"Please approve {target_playbook} for the Sales Research Agent ({record_count} customers)."
+                action_desc = "Please review the proposed access change in the case before approving it."
 
-            body_text = f"{header}\n{requester_line}{action_desc}"
+            body_text = f"{header}\n\n*Approval needed*\n{requester_line}\n{action_desc}"
         elif key == "outcome":
             case = self.cases.get_case(case_id)
             status = case.get("status") if case else "resolved"
@@ -207,7 +214,7 @@ class SlackNotifier:
             elif unverified_undo:
                 body_text = "Case requires review: Undo action could not be verified."
             elif verified_revoke:
-                body_text = "Case resolved: Sales Research Agent CRM grant revoked."
+                body_text = "Case resolved: Sales Research Agent permission to read CRM customer data revoked."
             elif unverified_revoke:
                 body_text = "Case requires review: Revocation could not be verified."
             elif verified_pause:
@@ -227,17 +234,28 @@ class SlackNotifier:
             header_target = format_role(addressed_to)
             body_text = f"To: {header_target}\nSecurity decision required ({record_count} customers)."
 
-        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": body_text}}]
+        closed = (self.cases.get_case(case_id) or {}).get("status") in ("resolved", "needs_review", "dismissed")
+        if decision or closed:
+            body_text = "\n\n".join(part for part in body_text.split("\n\n")
+                if not part.startswith(("*Your decision*", "*Next step*", "If you do not respond")))
+
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": part}} for part in body_text.split("\n\n") if part]
 
         if decision:
             choice = decision["choice"]
             actor_name = format_name(decision["employee_id"])
-            confirmation = f"\n\n*Decision: {choice.title()} by {actor_name}*"
+            label = workbench_messages.LABELS.get(choice, choice.replace('_', ' ').capitalize()) if workbench else {
+                'retire':'Retire it', 'keep':'Keep it; assign a new owner', 'undo':'Undo pause',
+                'approve':'Approve access change', 'reject':'Reject access change', 'timeout':'Response deadline passed',
+            }.get(choice, choice.replace('_', ' ').capitalize())
+            confirmation = f"\n\n*Decision recorded: {escape_slack_text(label)} — {escape_slack_text(actor_name)}*"
             body_text += confirmation
-            blocks[0]["text"]["text"] = body_text
-        elif key != "outcome" and payload.get("choices"):
+            blocks.append({"type":"section", "text":{"type":"mrkdwn", "text":confirmation.strip()}})
+        elif key != "outcome" and payload.get("choices") and not closed:
             for choice in payload["choices"]:
-                if key.startswith("approve:"):
+                if workbench:
+                    label = workbench_messages.LABELS.get(choice, choice.title())
+                elif key.startswith("approve:"):
                     target_playbook = key[len("approve:"):]
                     action_noun = "pause" if "pause" in target_playbook else "revocation"
                     if choice == "approve":
@@ -272,7 +290,7 @@ class SlackNotifier:
 
     async def notify(self, case_id: str, key: str, payload: dict):
         body = self.render_body(case_id, key, payload)
-        self.slack_store.enqueue(case_id, key, self.config.channel, body)
+        self.slack_store.enqueue(case_id, key, self.config.channel, body, payload=payload)
 
     async def flush(self):
         now = time.time()
@@ -280,8 +298,15 @@ class SlackNotifier:
             body = json.loads(row["body"])
             has_actions = any(b.get("type") == "actions" for b in body.get("blocks", []))
             if has_actions:
-                q = self.cases.question(row["case_id"])
-                updated_body = self.render_body(row["case_id"], row["key"], q or {})
+                q = json.loads(row["payload"]) if row.get("payload") else None
+                if q is None:
+                    # Old outbox rows predate saved rendering context.
+                    q = next((e['data'] for e in self.cases.get_events(row['case_id'])
+                              if e['key'] == 'question:' + row['key']), None)
+                if q is None:
+                    current = self.cases.question(row["case_id"])
+                    q = current if current and current.get('key') == row['key'] else {}
+                updated_body = self.render_body(row["case_id"], row["key"], q)
                 self.slack_store.enqueue(row["case_id"], row["key"], row["channel"], updated_body)
 
         pending = self.slack_store.pending(now)

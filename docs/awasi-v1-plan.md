@@ -1,6 +1,6 @@
 # Awasi v1: one complete find, investigate, fix loop
 
-Status: Phase 0 completed 2026-11-10; Phases 1–8 have not started. This file is the canonical copy for handoff; the Cursor plan mirrors it. Phase 0 removed the superseded `implementation-phases.md`, `autonomous-security-plan.md` and `phases-5-6-implementation-status.md`.
+Status: Phases 0–7 implemented and verified through 2026-11-12; Phase 8 has not started. This file is the canonical copy for handoff; the Cursor plan mirrors it. Phase 0 removed the superseded `implementation-phases.md`, `autonomous-security-plan.md` and `phases-5-6-implementation-status.md`.
 
 Goal: cut the plumbing and planning that do not serve the product, make the simulated company capable of real AI-agent and AI-built-app leaks, and build one complete loop on the existing graph: find, investigate, decide, fix, verify, and explain in Slack. Three scenarios, each taking a different route through the decision model.
 
@@ -440,6 +440,77 @@ Add one test marked `live` that runs the real model on the orphaned-agent fixtur
 
 **Done when.** Both suites pass, the manual walkthrough of all three scenarios is recorded with date and outcome, and anything not run is listed as not run.
 
+## Phase 7 results
+
+**Complete — 2026-11-12.** All three manual Slack scenarios resolved with verified
+changes, real-model investigations, and matching dashboard timelines. The manual
+public-app run used Keep it company-only; Undo was verified in automated tests,
+not manually in Slack.
+
+- Full final Python suite with real Neo4j: **785 passed, 1 skipped** (the opt-in
+  pytest live smoke; the separate paid evaluation ran). Frontend: **42 passed**.
+  Functional timing checks were made deterministic/tolerant of cold starts;
+  the final run passed with both isolated Neo4j instances running.
+- Added `tests/test_v1_acceptance.py`: real HTTP/Neo4j/MCP boundaries, scripted
+  investigation and fake Slack. All six scenarios/checks pass, including closing
+  and reopening SQLite checkpoints while waiting, unmapped identities, Undo,
+  quiet controls and ambiguous mutation outcomes.
+- Added `make eval`, a six-case offline assessment evaluation. It scores raw
+  references before sanitization, cause classes, owner eligibility and safe
+  controls. Reports are immutable to prevent accidental paid reruns. Provider
+  failure stops further requests; unrun cases are failures, not fallback passes.
+- Live evaluation: `data/phase7-evaluation-v4.json`: **6/6 passed**. Earlier reports
+  are retained: v1 exposed question/reference/classification problems; v2 passed;
+  corrected seed metadata in v3 exposed a malformed provider response. V4 uses
+  strict tool output plus local length/schema validation. This is an assessment
+  eval, not proof of reliable MCP tool selection or statistical model accuracy.
+- The shared production investigation prompt now defines cause classes, exact
+  ID fields and active-owner eligibility. Production still validates and sanitizes
+  model output and records fallback separately.
+- `$0.50` new spend authorized. `data/phase7_live_ledger.json` is shared with the
+  isolated Docker worker; legacy `data/live_test_ledger.json` is untouched. Final
+  estimate: **$0.0150504 across 34 requests** (24 evaluation calls and 10 live
+  investigation calls), with no pending reservations. The paid worker is stopped.
+- Added `make demo-reset` with explicit typed confirmation; it preserves host
+  credentials and usage ledgers and leaves the paid worker stopped. The destructive
+  reset was **not executed**; confirmation/failure behavior was unit tested.
+- Added `compose.acceptance.yaml` for separate volumes/networks and dashboard
+  port 3001. The original demo data is preserved. Changed Neo4j health checks to
+  a lightweight HTTP probe after timed-out Java CLI probes accumulated processes;
+  database query correctness is covered by integration tests.
+- README now covers setup, the three Slack flows, controls, safe reset, spending
+  caps, test commands and the isolated stack.
+
+| Live Docker scenario | Trigger → finding | Trigger → first Slack | Fix dispatch → verified | Manual result |
+| --- | --- | --- | --- | --- |
+| Inactive owner | 14.111 s | 20.493 s | Pause 0.784 s; revoke 0.521 s | Retire + approve; resolved; CRM request returns 403 |
+| Public app | 14.568 s | 23.172 s | Restrict 0.746 s | Restrict + keep restricted; resolved; public link returns 404 |
+| Unapproved destination | 10.891 s | 18.606 s | Pause 0.474 s; disable 0.032 s; resume 0.044 s | Remove connection + resume; resolved; repeat run sends zero records |
+
+Timings use persisted finding/action timestamps and Slack message timestamps.
+Fix timing starts at dispatch and includes execution and verification; it does
+not measure from the user click or include the time spent waiting for approval.
+Trigger time is recorded before invoking the operator command, so it includes
+local command overhead. They are one-run demo measurements, not latency guarantees.
+Automated test reports and live walkthrough metadata are retained locally under
+`data/`; no credentials or customer record bodies are included in the results here.
+
+Manual Slack receipts: [offboarding](https://helio-awasi.slack.com/archives/C0CBMP5UPRT/p1794477671086709),
+[public sharing](https://helio-awasi.slack.com/archives/C0CBMP5UPRT/p1794477825247489),
+[external destination](https://helio-awasi.slack.com/archives/C0CBMP5UPRT/p1794478021712359).
+Browser checks confirmed all three resolved findings and timelines matching the
+recorded human decisions and verified actions. The restricted public path correctly
+reports that the current graph no longer contains its former outside relationship.
+
+Not run live: manual Undo/override escalation, unmapped-user rejection, and crash/
+ambiguous-write injection (covered by automated acceptance tests); destructive
+reset; optional CRM activity webhook pipeline. Live model summaries explicitly
+reported CRM activity HTTP 503 because that optional pipeline was not enabled;
+CRM inventory and Workbench event evidence were available. No customer content
+was required to resolve these scenarios. The outside receiver retains the six
+synthetic records' delivery metadata; the repeat agent run sent zero additional
+records after disabling the destination. Normal demo volumes/history were not reset.
+
 ## Phase 8: final cleanup
 
 **Goal.** Remove the Awasi-style enforcement that still lives inside the CRM.
@@ -482,9 +553,9 @@ Update after each phase with date, commit, and the test commands and counts actu
 - Phase 2, Slack: **complete — 2026-11-10**. See verification section below.
 - Phase 3, model, MCP and tracing: **implementation and review fixes verified — 2026-11-11; live Slack acceptance pending**. See the follow-up verification section and `docs/phase3-validation.md`.
 - Phase 4, workbench and outside: not started
-- Phase 5, graph, rules and workbench playbooks: not started
-- Phase 6, dashboard: not started
-- Phase 7, acceptance: not started
+- Phase 5, graph, rules and workbench playbooks: implemented; local validation recorded below, live Slack acceptance pending
+- Phase 6, dashboard: **verified — 2026-11-12; live Slack timeline comparison completed in Phase 7**. See verification below.
+- Phase 7, acceptance: **complete — 2026-11-12**. See Phase 7 results above for tests, live scenarios, cost, timings and explicitly unrun checks.
 - Phase 8, final cleanup: not started
 
 
@@ -907,3 +978,79 @@ Fixed five follow-up review gaps:
    - Frontend UI suite: `make test-ui` — **20 passed in 161ms**.
    - Formatting and config: `git diff --check` and `docker compose config --quiet` passed with 0 errors.
    - Zero modifications to `src/helio_security/` or `src/helio_dashboard/`. No commits or pushes made. No paid API calls or Slack messages sent.
+
+
+## Phase 5 implementation — 2026-11-12
+
+Implemented the third inventory source, graph nodes/edges, three-rule registry,
+per-rule source freshness, and durable company-scoped exceptions. Removed the
+legacy `GraphStore.risks()` path and migrated its tests to `GraphReader.evaluate`.
+Rule paths and source status are read together. Existing inactive-owner callers
+retain the original evaluation fields; the observer reconciles all evaluations.
+
+Implemented versioned restrict-app, pause-agent, and disable-destination playbooks
+with persisted before-state, dispatch markers, verification, and undo. The read
+MCP server exposes six metadata tools; only the deterministic workflow receives
+the action server. Compose supplies the workbench configuration to both services
+and passes only the required credentials to each MCP subprocess.
+
+Public sharing asks the owner first when no anonymous views were observed in the
+last hour; rejection or the 15-minute deadline restricts it. Observed public views
+trigger immediate restriction. After verified restriction, the owner has a
+15-minute keep/undo window. Undo records an override and requires an approver on
+the next open case. Intentional sharing is a seven-day exception. Destination
+sends trigger pause, a short owner explanation, and three approver choices:
+remove-and-resume, keep-paused, or allow seven days. Resume never follows a failed
+connection-removal check. A fresh inventory read also keeps the agent paused if
+any other enabled destination lacks an allowlist entry or an active exception. Unknown outcomes require review without retrying the
+mutation. Approval expiry uses the persisted decision time, including recovery.
+
+Slack text uses available counts and timestamps; it does not invent a first-send
+time or lifetime view count. The public probe returns only status/count/field
+metadata, and successful probes count as anonymous views in the simulator.
+Workbench observations use the existing polling interval, not a new webhook.
+
+Validation includes both complete local scenarios through HTTP inventories,
+Neo4j, the observation worker, the case worker, real MCP subprocesses, and Slack
+callbacks with a fake transport. Control fixtures remain silent. Live Slack
+channel delivery and paid model calls were not exercised. The deferred Phase 4
+items remain in `docs/fixes.md`; dashboard changes remain Phase 6.
+
+Final validation: the full Python suite with real Neo4j enabled completed with
+**763 passed, 1 skipped** (the opt-in live model test). `docker compose config
+--quiet` and `git diff --check` also passed. No live Slack messages or paid model
+requests were sent. Neo4j was started only for these checks and stopped afterward;
+its volumes and existing demo data were preserved.
+
+
+### Phase 6 verification — 2026-11-12
+
+Implemented the dashboard's outside lane, evidence-backed risk highlighting,
+read-only case details, action verification/undo history, collapsed traces, and
+server-supplied detection/decision/playbook catalog. Case reads use the existing
+server-side viewer credential. No decision/undo proxy or new page was added.
+There are 24 added CSS lines, within the phase's 100-line limit.
+
+TDD checks failed first for missing case routes/catalog, graph lanes and paths,
+case rendering, browser interactions, and workbench access/flag displays. Follow-up
+regressions caught drawer scroll/focus loss during polling and same-time timeline
+event ordering; these were fixed and rerun.
+
+- `make test-ui`: **34 passed**.
+- `.venv/bin/python -m pytest -q`: **749 passed, 21 skipped** without Neo4j settings.
+- Same full suite with real Neo4j and isolated test companies: **769 passed,
+  1 skipped**, with one existing LangChain beta warning. Only the optional paid
+  model probe remains skipped. Neo4j was stopped after testing; volumes retained.
+- Real HTTP integration tests cover dashboard → security API → persisted workflow
+  records for all three scenarios, including actions verified against real local
+  CRM/workbench test services.
+- Browser checked all three scenario paths, case timelines, verified action badges,
+  trace expansion and the policy catalog using a disposable local preview.
+  This is local rendering verification, not a live Slack acceptance run.
+
+The inactive-owner scenario ends at confidential CRM data; it has no evidenced
+outside destination. The two workbench scenarios extend to Public or Destination.
+Changed/removed edges are disclosed rather than invented to complete a path.
+The dashboard loads the latest 200 cases and up to 500 spans per case, with visible
+limits/unavailability. Live Slack parity remains a Phase 7 check. No paid model
+calls or real Slack messages were made. Changes are not committed yet.

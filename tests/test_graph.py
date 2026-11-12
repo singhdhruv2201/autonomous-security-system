@@ -11,6 +11,7 @@ from neo4j import GraphDatabase
 
 from helio_crm.store import CRMStore
 from helio_security.graph import GraphStore
+from helio_security.reader import GraphReader
 from helio_security.models import normalize
 from helio_security.sync import sync_all
 
@@ -74,17 +75,17 @@ def test_offboarding_and_revocation_change_observed_risk_without_enforcement(gra
     directory, crm, tokens = sources
     now = time.time()
     sync(graph, sources, now)
-    assert graph.risks(now)["findings"] == []
+    assert all(c["state"] != "open" for c in GraphReader(graph).evaluate(now)["candidates"])
     directory.set_employee_status("emp-maya-chen", "inactive")
     sync(graph, sources, now + 1)
-    result = graph.risks(now + 1)
+    result = GraphReader(graph).evaluate(now + 1)
     assert result["coverage_complete"] is True
-    assert len(result["findings"]) == 1
-    assert result["findings"][0]["grant_id"] == "grant-sales-agent"
+    assert len([c for c in result["candidates"] if c["state"] == "open"]) == 1
+    assert result["candidates"][0]["evidence"]["grant_id"] == "grant-sales-agent"
     assert len(crm.list_customers(tokens["agent"])) == 6
     crm.revoke_grant(tokens["admin"], "grant-sales-agent", 1)
     sync(graph, sources, now + 2)
-    assert graph.risks(now + 2)["findings"] == []
+    assert GraphReader(graph).evaluate(now + 2)["candidates"][0]["reason"] == "grant_revoked"
     rows = query(graph, "MATCH (g:AccessGrant {company_id:$company, id:'grant-sales-agent'}) RETURN g.status AS status, g.version AS version")
     assert dict(rows[0]) == {"status": "revoked", "version": 2}
 
@@ -94,14 +95,16 @@ def test_failure_retains_evidence_marks_coverage_stale_and_recovery_clears_error
     sources[0].set_employee_status("emp-maya-chen", "inactive")
     sync(graph, sources, now)
     graph.fail("crm", "http_403", now + 1)
-    result = graph.risks(now + 1)
-    assert result["coverage_complete"] is False and len(result["findings"]) == 1
-    assert result["findings"][0]["evidence_fresh"] is False
+    result = GraphReader(graph).evaluate(now + 1)
+    assert result["coverage_complete"] is False and len(result["candidates"]) == 1
+    assert result["candidates"][0]["state"] == "unknown"
+    assert result["candidates"][0]["evidence"]["grant_id"] == "grant-sales-agent"
     assert graph.status(now + 1)["sources"]["crm"]["error"] == "http_403"
     sync(graph, sources, now + 2)
-    assert graph.status(now + 2)["coverage_complete"] is True
+    assert GraphReader(graph).evaluate(now + 2)["coverage_complete"] is True
+    assert graph.status(now + 2)["sources"]["workbench"]["status"] == "never_synced"
     assert graph.status(now + 2)["sources"]["crm"]["error"] is None
-    assert graph.risks(now + 1000)["coverage_complete"] is False
+    assert GraphReader(graph).evaluate(now + 1000)["coverage_complete"] is False
 
 
 def test_missing_grant_is_unobserved_not_falsely_revoked(graph, sources):
@@ -124,8 +127,8 @@ def test_out_of_order_sync_and_failures_cannot_replace_newer_observations(graph,
     sync(graph, sources, now + 2)
     assert graph.apply(old, now + 1) is False
     assert graph.fail("directory", "unavailable", now + 1) is False
-    assert graph.risks(now + 2)["coverage_complete"] is True
-    assert len(graph.risks(now + 2)["findings"]) == 1
+    assert GraphReader(graph).evaluate(now + 2)["coverage_complete"] is True
+    assert len([c for c in GraphReader(graph).evaluate(now + 2)["candidates"] if c["state"] == "open"]) == 1
 
 
 def test_missing_directory_rolls_back_entire_crm_import(graph, sources):
@@ -141,7 +144,7 @@ def test_graph_namespaces_are_isolated(graph, sources):
     sync(graph, sources, now)
     other = GraphStore(graph.driver, company_id="test-empty-" + uuid.uuid4().hex)
     assert other.status()["counts"] == {}
-    assert other.risks()["findings"] == []
+    assert GraphReader(other).evaluate()["candidates"] == []
 
 
 @contextmanager
@@ -177,12 +180,13 @@ def test_real_api_connectors_to_real_neo4j_and_revoked_observer(graph, sources):
         assert sync_all(graph, directory_url, crm_url, tokens["observer"]) == {"directory": "ok", "crm": "ok"}
         directory.set_employee_status("emp-maya-chen", "inactive")
         sync_all(graph, directory_url, crm_url, tokens["observer"])
-        assert len(graph.risks()["findings"]) == 1
+        assert len(GraphReader(graph).evaluate()["candidates"]) == 1
         crm.revoke_grant(tokens["admin"], "grant-security-observer", 1)
         result = sync_all(graph, directory_url, crm_url, tokens["observer"])
         assert result == {"directory": "ok", "crm": "http_403"}
-        assert graph.risks()["coverage_complete"] is False
-        assert len(graph.risks()["findings"]) == 1
+        assert GraphReader(graph).evaluate()["candidates"][0]["state"] == "unknown"
+        assert GraphReader(graph).evaluate()["coverage_complete"] is False
+        assert len(GraphReader(graph).evaluate()["candidates"]) == 1
 
 
 def test_failed_update_rolls_back_retirement_of_existing_graph(graph, sources):
@@ -206,3 +210,13 @@ def test_parallel_repeated_snapshots_do_not_duplicate_graph(graph, sources):
         list(pool.map(lambda offset: graph.apply(snapshot, now + offset), [1, 2, 3]))
     assert graph.status(now + 3)["counts"] == before
     assert graph.status(now + 3)["sources"]["crm"]["last_success"] == now + 3
+
+
+@pytest.fixture
+def workbench_sources(directory,tmp_path):
+    from helio_workbench.store import WorkbenchStore
+    tokens = {key:secrets.token_urlsafe(32) for key in
+              ('admin','maya','agent','observer','renewal_tracker','support_lookup','lead_enrichment','renewal_digest')}
+    crm = CRMStore(tmp_path/'crm.sqlite3')
+    crm.initialize(directory.employees(),tokens)
+    return directory,crm,tokens,WorkbenchStore(tmp_path/'wb.sqlite3')

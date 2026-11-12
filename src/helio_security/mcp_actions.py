@@ -130,6 +130,42 @@ async def crm_verify(
     return await pb.verify(target, crm_url=crm_url, observer_token=observer_token, **kwargs)
 
 
+def _workbench_config():
+    return {"workbench_url":os.getenv("WORKBENCH_URL", "http://127.0.0.1:8004"),
+            "workbench_observer_token":os.getenv("WORKBENCH_OBSERVER_TOKEN", ""),
+            "workbench_action_token":os.getenv("WORKBENCH_ACTION_TOKEN", "")}
+
+
+def _workbench_book(playbook_id):
+    if not playbook_id.startswith("workbench."):
+        raise PlaybookError("Not a workbench playbook")
+    return get_playbook(playbook_id)
+
+
+@actions_server.tool(tags=["destructive"], annotations=ToolAnnotations(destructive_hint=True))
+async def workbench_run(playbook_id: str, target: str, before_state: Optional[dict] = None) -> dict:
+    """Apply an allowlisted versioned workbench fix; deterministic workflow only."""
+    return await _mutation(_workbench_book(playbook_id).run, target, before_state=before_state, **_workbench_config())
+
+
+@actions_server.tool(tags=["destructive"], annotations=ToolAnnotations(destructive_hint=True))
+async def workbench_undo(playbook_id: str, target: str, before: dict, before_state: Optional[dict] = None) -> dict:
+    """Restore the saved state of a versioned workbench target."""
+    return await _mutation(_workbench_book(playbook_id).undo, target, before=before, before_state=before_state, **_workbench_config())
+
+
+@actions_server.tool(tags=["read_only"], annotations=ToolAnnotations(read_only_hint=True))
+async def workbench_read(playbook_id: str, target: str) -> dict:
+    """Read the pre-state needed for a durable action."""
+    return await _workbench_book(playbook_id).read(target, **_workbench_config())
+
+
+@actions_server.tool(tags=["read_only"], annotations=ToolAnnotations(read_only_hint=True))
+async def workbench_verify(playbook_id: str, target: str, expected_state: Optional[str | bool] = None) -> bool:
+    """Verify a workbench post-state, including anonymous denial for restricted apps."""
+    return await _workbench_book(playbook_id).verify(target, expected_state=expected_state, **_workbench_config())
+
+
 def _decode_mcp_result(res: Any) -> Any:
     """Normalize supported FastMCP / MCP result formats into application values."""
     if res is None:
@@ -180,6 +216,8 @@ class MCPPlaybook:
         self.id = playbook_id
         self.reversible = reversible
         self._target = adapter_or_server
+        self.state_field = getattr(REGISTRY[playbook_id], "state_field", "principal_status")
+        self.workbench = playbook_id.startswith("workbench.")
 
     async def _call_tool(self, name: str, **kwargs) -> Any:
         filtered = {k: v for k, v in kwargs.items() if v is not None}
@@ -194,7 +232,7 @@ class MCPPlaybook:
         except PlaybookError:
             raise
         except Exception:
-            if name in {"crm_pause_principal", "crm_revoke_grant", "crm_undo_pause"}:
+            if name in {"crm_pause_principal", "crm_revoke_grant", "crm_undo_pause", "workbench_run", "workbench_undo"}:
                 raise UnknownOutcome("MCP mutation response unavailable") from None
             raise PlaybookError("MCP read unavailable") from None
 
@@ -204,7 +242,7 @@ class MCPPlaybook:
         **kwargs,
     ) -> dict:
         decoded = await self._call_tool(
-            "crm_read",
+            "workbench_read" if self.workbench else "crm_read",
             playbook_id=self.id,
             target=target,
         )
@@ -220,10 +258,11 @@ class MCPPlaybook:
         **kwargs,
     ) -> dict:
         tool_name = "crm_pause_principal" if self.id == "crm.pause_principal" else "crm_revoke_grant"
+        extra = {"playbook_id":self.id} if self.workbench else {"force_version":force_version}
         decoded = await self._call_tool(
-            tool_name,
+            "workbench_run" if self.workbench else tool_name,
             target=target,
-            force_version=force_version,
+            **extra,
             before_state=before_state,
         )
         if not isinstance(decoded, dict) or "status" not in decoded:
@@ -241,7 +280,8 @@ class MCPPlaybook:
         if not self.reversible:
             raise PlaybookError(f"{self.id} is not reversible")
         decoded = await self._call_tool(
-            "crm_undo_pause",
+            "workbench_undo" if self.workbench else "crm_undo_pause",
+            **({"playbook_id":self.id} if self.workbench else {}),
             target=target,
             before=before,
             before_state=before_state,
@@ -265,7 +305,7 @@ class MCPPlaybook:
         **kwargs,
     ) -> bool:
         decoded = await self._call_tool(
-            "crm_verify",
+            "workbench_verify" if self.workbench else "crm_verify",
             playbook_id=self.id,
             target=target,
             expected_state=expected_state,
@@ -277,10 +317,9 @@ class MCPPlaybook:
 
 def create_mcp_playbooks(adapter_or_server: Any) -> Dict[str, MCPPlaybook]:
     """Create playbook instances backed by the MCP action server."""
-    return {
-        "crm.pause_principal": MCPPlaybook("crm.pause_principal", reversible=True, adapter_or_server=adapter_or_server),
-        "crm.revoke_grant": MCPPlaybook("crm.revoke_grant", reversible=False, adapter_or_server=adapter_or_server),
-    }
+    return {identifier:MCPPlaybook(identifier, reversible=pb.reversible, adapter_or_server=adapter_or_server)
+            for identifier,pb in REGISTRY.items()}
+
 
 
 if __name__ == "__main__":

@@ -11,7 +11,10 @@ from .tracing import Tracer
 
 async def call_playbook(method, target, deps, **kwargs):
     values = {"crm_url": deps.crm_url, "action_token": deps.action_token,
-              "observer_token": deps.observer_token, **kwargs}
+              "observer_token": deps.observer_token,
+              "workbench_url": getattr(deps, "workbench_url", None),
+              "workbench_observer_token": getattr(deps, "workbench_observer_token", None),
+              "workbench_action_token": getattr(deps, "workbench_action_token", None), **kwargs}
     parameters = inspect.signature(method).parameters
     arguments = {key: value for key, value in values.items() if key in parameters}
     result = method(target, **arguments)
@@ -34,7 +37,7 @@ async def dispatch(deps, case_id, playbook_id, target, *, requested_by="awasi", 
                             result={"reason": "legacy_dispatch_state_unknown"})
         return store.get_action(action_id)
     pb = deps.playbooks.get(playbook_id)
-    expected = {"expected_state": undo_of["before"]["principal_status"]} if undo_of else {}
+    expected = {"expected_state": undo_of["before"][getattr(pb, "state_field", "principal_status")]} if undo_of else {}
     tracer = Tracer(store, case_id) if hasattr(store, "record_span") else None
 
     async def reconcile():

@@ -21,13 +21,14 @@ from .cases import CaseStore
 from .reader import GraphReader
 from .settings import Settings
 from .worker import ObservationWorker
-from .policies import POLICIES
+from .policies import POLICIES, workflow_catalog
 from .activity_client import ActivityClient, ActivityUnavailable, activity_query
 
 bearer = HTTPBearer(auto_error=False)
 Limit = Annotated[int, Query(ge=1, le=200)]
 Offset = Annotated[int, Query(ge=0, le=100000)]
-Kind = Literal["Employee", "Team", "App", "Agent", "AppAccount", "ServiceAccount", "DataResource", "AccessGrant"]
+from .graph import NODE_KINDS
+Kind = Literal[tuple(sorted(set.union(*NODE_KINDS.values())))]
 
 
 class SyncRequest(BaseModel):
@@ -64,7 +65,8 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
             if start_worker:
                 worker = ObservationWorker(platform_store, platform_graph, platform_reader,
                     configured.directory_url, configured.crm_url, configured.observer_token,
-                    interval=configured.sync_interval)
+                    interval=configured.sync_interval, workbench_url=configured.workbench_url,
+                    workbench_token=configured.workbench_observer_token)
                 worker.start()
             app.state.services = SimpleNamespace(settings=configured, graph=platform_graph,
                 store=platform_store, case_store=platform_case_store, reader=platform_reader, worker=worker)
@@ -177,12 +179,15 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
             raise HTTPException(409, str(err))
         return {"status": "recorded", "case_id": case_id, "key": body.key, "choice": body.choice}
 
+    def rule_fresh(rule, source_status):
+        return all(source_status["sources"].get(source, {}).get("fresh", False)
+                   for source in POLICIES[rule].sources)
+
     @app.get("/policies", tags=["Observation"])
     def policies(identity=Depends(principal), service=Depends(services)):
         status = service.graph.status()
-        coverage_status = "current" if status["coverage_complete"] else "unknown"
         return {"company_id": identity["company_id"],
-                "items": [{**p.view(), "coverage_status": coverage_status} for p in POLICIES.values()]}
+                **workflow_catalog(), "items": [{**p.view(), "coverage_status": "current" if rule_fresh(p.id, status) else "unknown"} for p in POLICIES.values()]}
 
     @app.get('/activity', tags=['Activity'])
     def list_activity(identity=Depends(principal), query=Depends(activity_query)):
@@ -226,17 +231,16 @@ def create_app(settings=None, *, graph=None, store=None, reader=None, start_work
                  identity=Depends(principal), service=Depends(services)):
         source_status = coverage(service)
         page = service.store.findings(identity["company_id"], status=status, limit=limit, offset=offset)
-        if not source_status["coverage_complete"]:
-            for item in page["items"]:
-                if item.get("lifecycle") == "posture":
-                    item.update(assessment="unknown", evidence_fresh=False)
+        for item in page["items"]:
+            if item.get("lifecycle") == "posture" and not rule_fresh(item["rule"], source_status):
+                item.update(assessment="unknown", evidence_fresh=False)
         return {**source_status, **page}
 
     @app.get("/findings/{finding_id}", tags=["Findings"])
     def finding(finding_id: str, identity=Depends(principal), service=Depends(services)):
         item = found(service.store.finding(identity["company_id"], finding_id))
         source_status = coverage(service)
-        if not source_status["coverage_complete"] and item.get("lifecycle") == "posture":
+        if item.get("lifecycle") == "posture" and not rule_fresh(item["rule"], source_status):
             item.update(assessment="unknown", evidence_fresh=False)
         return {**source_status, **item}
 

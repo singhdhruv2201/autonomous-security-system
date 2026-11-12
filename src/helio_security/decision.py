@@ -34,6 +34,17 @@ _RULE_PLAYBOOKS = {
 }
 
 
+# Public descriptions follow the same first-match order as decide().
+DECISION_RULES = (
+    {"order":1, "name":"Human override", "description":"A previous human override requires an approver before another fix."},
+    {"order":2, "name":"Active exposure", "description":"Contain an active confidential-data leak with a reversible action, then notify the owner or approver."},
+    {"order":3, "name":"Inactive owner", "description":"For an inactive or unknown owner with no dependents, apply a reversible fix. Low confidence requires an approver."},
+    {"order":4, "name":"Owner decision", "description":"For an active owner with exposure, ask for a decision with a deadline. Destination exceptions require an approver."},
+    {"order":5, "name":"Approval required", "description":"Irreversible actions, dependency impact, or no reversible fix require an approver."},
+    {"order":6, "name":"Record only", "description":"Otherwise record the finding without taking automatic action."},
+)
+
+
 @dataclass(frozen=True)
 class Facts:
     rule: str

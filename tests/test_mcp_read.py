@@ -180,7 +180,7 @@ def test_read_server_tools_are_read_only_and_exclude_actions():
     async def scenario():
         raw_tools = await read_server.list_tools()
         tools = [t.name for t in raw_tools]
-        assert set(tools) == {"get_finding", "get_entity", "get_neighbors", "get_crm_activity"}
+        assert set(tools) == {"get_finding", "get_entity", "get_neighbors", "get_crm_activity", "get_workbench_events", "probe_public_app"}
         # Check that no destructive/mutation action tools exist on read_server
         assert not any("pause" in name or "revoke" in name or "undo" in name for name in tools)
     asyncio.run(scenario())
@@ -192,7 +192,7 @@ def test_mcp_adapter_with_read_server():
         adapter = MCPAdapter(read_server)
         tools = await adapter.list_tools()
         names = {t.name for t in tools}
-        assert names == {"get_finding", "get_entity", "get_neighbors", "get_crm_activity"}
+        assert names == {"get_finding", "get_entity", "get_neighbors", "get_crm_activity", "get_workbench_events", "probe_public_app"}
     asyncio.run(scenario())
 
 

@@ -12,13 +12,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 
-class PlaybookError(Exception):
-    """Raised when a playbook execution or verification fails."""
-    pass
-
-
-class UnknownOutcome(PlaybookError):
-    """A dispatched request could not be reconciled; never retry blindly."""
+from .playbook_errors import PlaybookError, UnknownOutcome
 
 
 class PausePrincipalPlaybook:
@@ -214,3 +208,7 @@ def get_playbook(playbook_id: str):
         return REGISTRY[playbook_id]
     except KeyError:
         raise PlaybookError(f"Unknown playbook: {playbook_id}")
+
+
+from .workbench_playbooks import WORKBENCH_PLAYBOOKS
+REGISTRY.update(WORKBENCH_PLAYBOOKS)

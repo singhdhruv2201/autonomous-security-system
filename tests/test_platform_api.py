@@ -116,7 +116,7 @@ def test_dashboard_capabilities_and_policy_describe_actual_observation(api):
     response = client.get("/policies", headers=auth(settings, "viewer"))
     assert response.status_code == 200
     assert "policy_runtime" not in overview
-    assert len(response.json()["items"]) == 1
+    assert len(response.json()["items"]) == 3
     policy = response.json()["items"][0]
     assert policy["id"] == "inactive_owner_agent_access" and policy["enabled"] is True
     assert policy["sources"] == ["directory", "crm"]
@@ -130,9 +130,10 @@ def test_policy_coverage_comes_from_graph_not_retired_runtime(api, complete):
     store.set_runtime("helio", "configuration", {"modes": {"sensitive_content": "enforce"}}, 100)
     store.set_runtime("helio", "identity_publisher", {"status": "unavailable"}, 100)
     graph.status.return_value["coverage_complete"] = complete
+    graph.status.return_value["sources"] = {s:{"fresh":complete} for s in ("directory","crm","workbench")}
     result = client.get("/policies", headers=auth(settings)).json()
-    assert set(result) == {"company_id", "items"}
-    assert [p["id"] for p in result["items"]] == ["inactive_owner_agent_access"]
+    assert set(result) == {"company_id", "items", "decision_rules", "playbooks"}
+    assert [p["id"] for p in result["items"]] == ["inactive_owner_agent_access", "public_app_confidential_data", "agent_unapproved_destination"]
     assert result["items"][0]["enabled"] is True
     assert result["items"][0]["coverage_status"] == ("current" if complete else "unknown")
 
@@ -209,3 +210,35 @@ def test_overview_reports_slack_configuration_and_delivery(api):
     assert client.get('/overview',headers=auth(settings)).json()['slack']['status']=='connected'
     store.set_runtime('helio','slack',{'status':'connected'},time.time()-100)
     assert client.get('/overview',headers=auth(settings)).json()['slack']['status']=='unavailable'
+
+
+def test_workbench_outage_only_marks_dependent_policies_and_findings_unknown(api):
+    import time
+    from test_phase5_graph import evaluation, finish, APP_RULE
+    from test_platform_store import evaluation as inactive_evaluation
+    client,settings,store,graph,_=api
+    now=time.time()
+    graph.status.return_value.update(coverage_complete=False, sources={
+        'directory':{'fresh':True},'crm':{'fresh':True},'workbench':{'fresh':False}})
+    finish(store,{'evaluations':[inactive_evaluation(now),evaluation(APP_RULE,now)]},now)
+    policies={p['id']:p for p in client.get('/policies',headers=auth(settings)).json()['items']}
+    assert policies['inactive_owner_agent_access']['coverage_status']=='current'
+    assert policies[APP_RULE]['coverage_status']=='unknown'
+    findings=client.get('/findings',headers=auth(settings)).json()['items']
+    assert len(findings)==2
+    for f in findings:
+        expected=f['rule']=='inactive_owner_agent_access'
+        assert f['evidence_fresh'] is expected
+        detail=client.get('/findings/'+f['id'],headers=auth(settings)).json()
+        assert detail['evidence_fresh'] is expected
+
+
+def test_policy_catalog_exposes_decision_order_and_reversible_playbooks(api):
+    from helio_security.playbooks import REGISTRY
+    client,settings,*_=api
+    result=client.get('/policies',headers=auth(settings,'viewer')).json()
+    assert len(result['decision_rules'])==6
+    assert [r['order'] for r in result['decision_rules']]==list(range(1,7))
+    assert 'override' in result['decision_rules'][0]['description'].lower()
+    assert {p['id']:p['reversible'] for p in result['playbooks']}=={k:v.reversible for k,v in REGISTRY.items()}
+    assert all(p['description'] for p in result['playbooks'])

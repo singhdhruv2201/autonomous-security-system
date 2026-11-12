@@ -7,9 +7,11 @@ from neo4j.exceptions import Neo4jError
 from .connectors import ConnectorError, fetch_snapshot
 
 
-def sync_all(graph, directory_url, crm_url, observer_token, *, fetch=fetch_snapshot, clock=time.time):
+def sync_all(graph, sources, crm_url=None, observer_token=None, *, fetch=fetch_snapshot, clock=time.time):
     results = {}
-    for source, url, token in (("directory", directory_url, None), ("crm", crm_url, observer_token)):
+    if isinstance(sources, str):  # Existing local callers can migrate independently.
+        sources = [("directory", sources, None), ("crm", crm_url, observer_token)]
+    for source, url, token in sources:
         # Timestamp the start of observation, not completion; a slow old request
         # must not overwrite a more recent snapshot.
         observed_at = clock()

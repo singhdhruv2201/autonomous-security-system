@@ -109,7 +109,7 @@ def test_evidence_ledger_filters_unallowlisted_playbook():
 def test_model_receives_only_read_tools_never_action_tools():
     investigator = ModelInvestigator(read_server=read_server, store=None)
     tool_names = [t.name for t in investigator.get_tools()]
-    assert set(tool_names) == {"get_finding", "get_entity", "get_neighbors", "get_crm_activity"}
+    assert set(tool_names) == {"get_finding", "get_entity", "get_neighbors", "get_crm_activity", "get_workbench_events", "probe_public_app"}
     # Verify no tools from actions_server are present
     action_tool_names = {"crm_pause_principal", "crm_revoke_grant", "crm_undo_pause"}
     assert not any(name in tool_names for name in action_tool_names)

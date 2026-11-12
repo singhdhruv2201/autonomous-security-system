@@ -7,7 +7,8 @@ import urllib.request
 
 import pytest
 
-from test_graph import graph, sources, serve
+from test_graph import graph, workbench_sources, serve
+from helio_workbench.api import create_app as workbench_app
 from helio_crm.api import create_app as crm_app
 from helio_simulator.api import create_app as directory_app
 from helio_security.api import create_app
@@ -35,18 +36,20 @@ def synchronize(url, settings):
     pytest.fail("Background observation did not finish")
 
 
-def test_real_platform_observation_lifecycle_and_restart(graph, sources, tmp_path):
-    directory, crm, tokens = sources
+def test_real_platform_observation_lifecycle_and_restart(graph, workbench_sources, tmp_path):
+    directory, crm, tokens, wb = workbench_sources
     with serve(directory_app(directory.path)) as directory_url, serve(
-            crm_app(crm.path, tokens, directory.employees)) as crm_url:
+            crm_app(crm.path, tokens, directory.employees)) as crm_url, serve(
+            workbench_app(store=wb,observer_token=tokens["observer"],action_token="a"*32,user_token="u"*32)) as workbench_url:
         settings = Settings(operator_token=secrets.token_urlsafe(32), viewer_token=secrets.token_urlsafe(32),
             observer_token=tokens["observer"], company_id=graph.company_id,
-            db_path=tmp_path / "security.sqlite3", directory_url=directory_url, crm_url=crm_url, sync_interval=0)
+            db_path=tmp_path / "security.sqlite3", directory_url=directory_url, crm_url=crm_url, sync_interval=0,
+            workbench_url=workbench_url, workbench_observer_token=tokens["observer"])
         with serve(create_app(settings, graph=graph)) as platform:
             assert synchronize(platform, settings)["status"] == "succeeded"
             assert request(platform, settings, "/overview")["counts"]["Employee"] == 20
             inventory = request(platform, settings, "/graph")
-            assert len(inventory["nodes"]) == 54 and len(inventory["edges"]) == 75
+            assert len(inventory["nodes"]) == 69 and len(inventory["edges"]) == 101
             assert request(platform, settings, "/findings")["total"] == 0
             directory.set_employee_status("emp-maya-chen", "inactive")
             assert synchronize(platform, settings)["status"] == "succeeded"
