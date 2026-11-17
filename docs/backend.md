@@ -2,14 +2,18 @@
 
 The platform now has a running API and background observation worker. It collects
 company metadata, maintains the graph, evaluates deterministic policies, and
-persists findings. It does not yet use an AI model, send Slack notifications,
-approve actions, or modify customer permissions.
+persists findings. The separate `awasi-agent` service consumes those findings,
+investigates with read-only model tools, coordinates Slack decisions, and runs
+verified remediation. This guide describes the observation/API boundary; see
+[architecture](architecture.md) and [model operations](model-operations.md) for
+the complete workflow.
 
 ```mermaid
 flowchart LR
     subgraph Customer[Customer network]
         Directory[Directory API]
         CRM[CRM API]
+        Workbench[Workbench API]
         Agent[Sales Research Agent] --> CRM
     end
     subgraph Platform[Security platform network]
@@ -20,23 +24,27 @@ flowchart LR
         API --> State
         API -->|queue refresh| Worker
         Dashboard[Dashboard gateway :3000] --> API
-        Client[Future AI investigator / Slack] -.-> API
+        Client[Case worker and Slack] --> API
     end
     Directory -->|read-only HTTP| Worker
     CRM -->|observer metadata only| Worker
+    Workbench -->|observer metadata only| Worker
 ```
 
-The worker and API share the `security-api` service. Only this service joins both networks. Customer services do not join
-the Neo4j network. The platform mounts only its own `security-state` volume; it
+The observation worker and API share the `security-api` service. That service and
+the separate case worker join the customer and platform networks. Customer
+services do not join the Neo4j network. The platform mounts only its own `security-state` volume; it
 has no customer SQLite mounts or CRM administrator, employee, or agent tokens.
 All published ports bind to localhost. This is a local development boundary,
 not a hardened production deployment.
 
 ## Start and use
 
+Follow the [Docker startup guide](getting-started.md#3-run-the-full-docker-stack-optional)
+first; it explains live-worker credentials and spending. Then use these commands:
+
 ```sh
 make setup                 # Add missing API credentials; preserve existing secrets
-make up
 make security-overview
 make security-findings
 make security-sync         # Returns a durable queued run, not the completed result
@@ -58,7 +66,7 @@ The worker requests an observation on startup. The v1 local configuration repeat
 every **15 seconds**; the unset fallback remains 60 seconds.
 `SECURITY_SYNC_INTERVAL` can be set locally to 5–3600 seconds, or `0` to disable
 scheduled observations while retaining manually requested background runs.
-Apply configuration changes by recreating the service with `make up`.
+Apply configuration changes by recreating the `security-api` service.
 
 ## API contract
 
@@ -72,10 +80,13 @@ schema are public on the local service; health reveals no company data.
 | GET | `/entities/{id}` | One current or previously observed entity |
 | GET | `/entities/{id}/relationships` | Current one-hop neighborhood, including incoming edges |
 | GET | `/graph` | Bounded current graph; optional `kind`, `limit`, `edge_limit` |
-| GET | `/policies` | Inactive-owner rule, conditions and graph coverage |
+| GET | `/policies` | Three detection rules, conditions and source coverage |
 | GET | `/connectors` | Last success/attempt, safe error codes, freshness |
 | GET | `/findings` | Persistent finding page; optional `status=open` or `resolved` |
 | GET | `/findings/{id}` | Evidence, reason, suggested fix, latest 100 transition events and total event count |
+| GET | `/cases` | Case page with current workflow status |
+| GET | `/cases/{case_id}` | Case details, evidence, actions and timeline |
+| POST | `/cases/{case_id}/decisions` | Operator: submit a decision for workflow validation |
 | POST | `/sync-runs` | Operator: enqueue a refresh; optional empty JSON object only |
 | GET | `/sync-runs` | Run history page |
 | GET | `/sync-runs/{id}` | Queued/running/final state and source results |
@@ -153,9 +164,9 @@ The credentials represent local viewer/operator roles, not individual human
 identities. Production SSO, per-user audit identity, tenant provisioning,
 distributed workers, retention policies, and deployment hardening remain future
 work. The [local dashboard](dashboard.md) and optional
-[activity ingestion and recovery](activity-processing.md) are implemented. AI
-investigation, Slack approval and verified remediation remain later milestones. The platform's CRM
-observer cannot execute remediation even if asked to do so.
+[activity ingestion and recovery](activity-processing.md) are implemented, as are
+model investigation, Slack approval, and verified remediation in the case worker.
+The platform's CRM observer cannot execute remediation even if asked to do so.
 
 ## Verification
 
@@ -172,14 +183,13 @@ tests delete only their own `test-*` graph namespaces.
 
 ## v1 observation scope
 
-The platform registry contains only `inactive_owner_agent_access`. `/policies`
-reports its conditions and coverage from the directory/CRM graph status. `/overview`
-reports observation and finding status, without the retired CRM policy-worker runtime.
-The identity publisher and activity-to-finding importer have been removed. A denied
-CRM request remains activity evidence; it does not automatically become a ticket.
+The registry exposes `inactive_owner_agent_access`, `public_app_confidential_data`,
+and `agent_unapproved_destination`, together with the decision rules and playbooks.
+`/policies` reports each rule's source coverage. `/overview` reports observation,
+finding, activity, and case-worker/Slack status where configured.
 
-Capture, delivery, recovery and the Activity tab remain available unchanged. Existing
-activity incidents in an upgraded database remain readable as historical CRM-policy
-findings; no tables are dropped or old findings silently resolved. `set_runtime` and
-`runtime` remain available internally for a later worker heartbeat. The next steps
-are in the [v1 plan](awasi-v1-plan.md).
+The optional activity pipeline remains separate. A denied CRM request is evidence,
+not automatically a new case under these snapshot-based rules. Existing activity
+incidents remain readable; no migration silently declares them resolved. Current
+limitations are tracked in [known limitations](known-limitations.md); historical
+implementation decisions live in the [archived plan](archive/awasi-v1-plan.md).

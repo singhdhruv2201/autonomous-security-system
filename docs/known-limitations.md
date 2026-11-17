@@ -1,15 +1,32 @@
-# Deferred fixes
+# Known limitations and follow-up work
 
-Recorded after the Phase 4 follow-up review on 2026-11-11.
+The prototype demonstrates bounded workflows, not production security coverage.
+For the broader product roadmap, see [future scope](../README.md#future-scope-not-yet-built).
 
-These issues are open but do not block the planned Phase 5 public-app and
-unapproved-destination demo scenarios. Continue Phase 5 without expanding the
-simulator hardening scope. Revisit these items before relying on broader
-destination support or accurate internal-view attribution.
+## Current boundaries
 
-For each behavioral fix, follow `AGENTS.md`: reproduce the issue with a failing
-test, implement the smallest correction, and run relevant unit and integration
-tests. Mark an item complete only after recording the validation performed.
+- Real SaaS connectors, multi-tenancy, SSO, inline prevention, and the proposed
+  periodic AI anomaly review are not implemented in v1.
+- The main stack polls source metadata. The showcase uses a per-session in-memory
+  graph and temporary data, not Neo4j or durable service hosting.
+- A single worker and SQLite checkpoints are suitable for the demo, not evidence
+  of high availability or production throughput.
+- Model text may be unavailable or require a bounded correction. Validated copy
+  and investigation state are distinct from verified action results.
+- Live Slack/model checks and automated fake-provider checks establish different
+  things. A previous full-suite run under concurrent local load failed a dashboard
+  graph/inventory availability assertion; startup and load reliability need further
+  verification. This is not a claim of a consistently green full integration suite.
+
+## Simulator review backlog
+
+Originally recorded November 11, 2026; checked against the current source during
+repository preparation on November 16, 2026. The three behaviors below remain
+present. They do not block the narrow demo scenarios, but should be addressed
+before extending destination support or relying on internal-view attribution.
+
+Follow [AGENTS.md](../AGENTS.md): reproduce each behavior with a failing test, make
+the smallest fix, and record relevant unit and integration results.
 
 ## FIX-01: Remove the test-specific destination-host exception
 
@@ -98,5 +115,5 @@ IPv6 at the first colon. Preserve brackets where required in URL authorities.
 ## Completion record
 
 When closing an item, record its ID, date, changed behavior, test commands and
-results, and commit reference if available. No implementation changes were made
-when this backlog was created.
+results, and commit reference if available. This repository-preparation update documents the remaining behavior; it does not
+implement these fixes.

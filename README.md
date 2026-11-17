@@ -1,4 +1,4 @@
-# Awasi — autonomous security prototype
+# Autonomous Security System
 
 An independent working prototype by **Dhruv Singh**, prepared for evaluation by
 Awasi's founders. It demonstrates how a security product can connect company
@@ -6,8 +6,8 @@ context to investigation, human decisions, and verified remediation. This is not
 an official Awasi release or a production deployment.
 
 **Start here:** [what it does](#what-the-product-does) ·
-[run the showcase](#1-run-the-browser-showcase-recommended) ·
-[run the full stack](#3-run-the-full-docker-stack-optional) ·
+[run the showcase](#run-the-showcase) ·
+[run the full stack](docs/getting-started.md#3-run-the-full-docker-stack-optional) ·
 [future scope](#future-scope-not-yet-built)
 
 **Private evaluation repository, not open source.** Awasi's founders have limited
@@ -73,143 +73,33 @@ the whole product is not an instant webhook-driven monitoring system.
 Recorded assessments are labeled as recordings, not presented as fresh model
 reasoning. The showcase's local graph does not demonstrate Neo4j operation.
 
-## Install and run
+## Run the showcase
 
-Commands below target macOS/Linux or a compatible WSL shell. Use Python 3.11
-for the environment used to generate the dependency locks, and Git to clone the
-repository. Docker is needed only for the full stack; Node.js is needed only for
-JavaScript checks. Installation and execution are subject to the [license](LICENSE).
-
-### 1. Run the browser showcase (recommended)
-
-Accept your GitHub repository invitation and authenticate Git on your machine
-before cloning this private repository.
+Accept your private GitHub invitation first. Use Python 3.11 and run from the
+repository root. This walkthrough needs no Docker, Slack credentials, or API keys.
 
 ```sh
-git clone https://github.com/singhdhruv2201/awasi.git
-cd awasi
+git clone https://github.com/singhdhruv2201/autonomous-security-system.git
+cd autonomous-security-system
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.lock
-PYTHONPATH=.:src .venv/bin/python -m showcase.app --no-slack --recorded-model
+make showcase
 ```
 
-Open **[http://127.0.0.1:3070](http://127.0.0.1:3070)** and click **Start baseline**.
-This mode needs no API keys, sends no Slack messages, and makes no model requests.
+Open **[http://127.0.0.1:3070](http://127.0.0.1:3070)**, click **Start baseline**,
+and run a scenario. Inspect its graph and timeline, then use the owner/approver
+controls to complete the case. Use **New baseline** between scenarios. `Ctrl+C`
+stops the showcase and removes its temporary session data.
 
-For a short walkthrough:
+`make showcase` explicitly uses recorded assessments and disables Slack: it does
+not spend API credits or send messages. The scenario actions still execute against
+real local service handlers with synthetic data.
 
-1. Run **Orphaned agent**. Inspect the access path and verified pause. Act as Hannah
-   to retire the agent, then as Casey to approve revocation.
-2. Choose **New baseline**, then run **Public internal app**. Make the app
-   company-only and confirm the restriction. Repeat with **Include anonymous
-   access** enabled to see immediate containment.
-3. Choose **New baseline**, then run **Unapproved destination**. Inspect the six
-   synthetic records counted at the receiver. Remove the connection and resume
-   the agent; the historical delivery count remains six.
-
-Select graph nodes and open the case timeline to inspect evidence and action
-verification. **New baseline** resets only that browser session. Stop the server
-with `Ctrl+C`; its temporary session data is removed on shutdown.
-See the [showcase guide](showcase/README.md) for the complete walkthrough.
-
-### 2. Enable live reasoning and Slack (optional)
-
-Use your own credentials in the ignored local `.env` file or shell environment.
-Never commit or send that file with the repository.
-
-For live model reasoning, configure `ANTHROPIC_API_KEY` and `AWASI_MODEL`. The
-current demo configuration uses `claude-haiku-5-5`; choose a model available to
-your Anthropic account and supported by the project's budget accounting. Then run:
-
-```sh
-PYTHONPATH=.:src .venv/bin/python -m showcase.app --no-slack --live-model
-```
-
-This makes paid requests. The showcase has a persistent estimated allowance of
-**$0.50 and 40 requests** in `showcase/data/anthropic-ledger.json`. Resetting the
-browser baseline does not reset this ledger. Estimates are not provider invoices;
-do not delete the ledger to bypass its limit.
-
-For real Slack messages and buttons, follow [Slack setup](docs/slack-setup.md).
-Configure `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `AWASI_SLACK_CHANNEL`, and
-`AWASI_SLACK_DEFAULT_USER`, then run:
-
-```sh
-PYTHONPATH=.:src .venv/bin/python -m showcase.app --live-model
-```
-
-The bot must be in the configured channel. In the solo demo, the configured Slack
-user acts as the fictional owner and approver. Stop any other worker listening on
-the same Slack app, or use a separate app, so button clicks reach the correct demo.
-Use `--recorded-model` instead of `--live-model` to demonstrate Slack without paid
-model calls. Starting without explicit flags can enable live calls when both model
-and Slack credentials are present.
-
-### 3. Run the full Docker stack (optional)
-
-Install Docker with Compose; the isolated acceptance overlay requires Compose
-2.24.4 or newer. From the cloned repository and Python environment above:
-
-```sh
-make setup
-docker compose config --quiet
-docker compose up --build -d --wait simulator crm workbench outside neo4j security-api dashboard
-```
-
-`make setup` generates local credentials in an ignored, owner-only `.env`,
-preserving existing credentials. Open the dashboard at
-**[http://localhost:3000](http://localhost:3000)**. The security API is on port 8002.
-This command starts the services and observation pipeline, but not the case worker.
-Allow the initial graph synchronization to finish before triggering scenarios.
-
-Configure Slack and Anthropic as above, stop the showcase if it uses the same
-Slack app, then explicitly start the worker:
-
-```sh
-docker compose up --build -d awasi-agent
-make offboard             # Complete the owner and approver conversation
-make publish-app          # Complete the public-sharing conversation
-make connect-enrichment   # Complete the unapproved-destination conversation
-```
-
-Run one scenario at a time. `make security-sync` requests an observation;
-`make security-findings`, `make security-cases`, and `make workbench-status`
-show current state. `make outsider-view` simulates anonymous app access. Even an
-investigator's anonymous probe records a view, so it is not a passive check.
-
-The normal worker has **no dollar cap unless a live ledger is configured**.
-For a separate budgeted environment, use `compose.acceptance.yaml` together with
-`compose.yaml` and project name `awasi-acceptance`. That overlay mounts
-`data/phase7_live_ledger.json` and defaults to a cumulative $0.50 / 40-request cap.
-Use the same project and file arguments for every command targeting that stack;
-ordinary `make` scenario commands target the normal stack.
-
-`docker compose stop` preserves data. `make demo-reset` requires typing
-`RESET DEMO` and removes the normal project's data volumes, including cases and
-checkpoints. It preserves `.env` and host usage ledgers and leaves the model/Slack
-worker stopped. It does not erase historical Slack messages.
-
-To enable the separate CRM event pipeline, follow
-[activity capture and delivery](docs/activity-delivery.md) and
-[activity processing and recovery](docs/activity-processing.md).
-
-### Validation
-
-```sh
-PYTHONPATH=.:src .venv/bin/python -m pytest -q showcase/tests
-node --check showcase/static/showcase.js
-make test
-make test-integration   # Requires configured Neo4j on localhost:7687
-make test-ui
-```
-
-Showcase tests exercise real service handlers with temporary data and fake model
-and Slack clients. The repository's acceptance tests also cover authorization,
-checkpoint recovery, Undo, and uncertain writes. They do not establish production
-reliability. Live provider and Slack checks are separate from automated tests.
-`make eval` is an explicit paid model evaluation; see
-[model validation](docs/phase3-validation.md) and the
-[recorded Phase 7 results](docs/awasi-v1-plan.md#phase-7-results) before running it.
+- [Installation and operation](docs/getting-started.md): complete walkthrough,
+  live model/Slack configuration, Docker services, spending limits, and reset.
+- [Showcase guide](showcase/README.md): scenarios and browser/Slack decisions.
+- [Architecture](docs/architecture.md): service boundaries and evidence flow.
+- [Documentation index](docs/README.md): current guides and historical records.
 
 ## Future scope (not yet built)
 
@@ -232,20 +122,34 @@ not configured; and uncertain actions require review. A previous full-suite run
 under load was not clean, so this README makes no blanket claim that every
 integration check currently passes.
 
-The [v1 plan](docs/awasi-v1-plan.md) records implementation history and the remaining
-cleanup phase; some earlier phase-status notes are historical. The
-[review backlog](docs/fixes.md) should be reconciled against current code before
-planning hardening work.
+The [known limitations](docs/known-limitations.md) track concrete open issues.
+The original [v1 plan](docs/archive/awasi-v1-plan.md) is archived as an implementation
+record, not the current setup guide.
 
-## Code and architecture guide
+## Repository layout
 
-- [Showcase](showcase/README.md): browser walkthrough, model modes, and Slack setup.
-- [Security backend](docs/backend.md), [graph](docs/graph.md), and
-  [dashboard](docs/dashboard.md): observation, access paths, and case presentation.
-- [CRM](docs/crm.md): source-side permissions and metadata.
-- [Slack integration](docs/slack-setup.md): delivery, decisions, message authorship,
-  and recovery behavior.
-- [Engineering instructions](AGENTS.md): test-driven behavioral development.
+```text
+.github/workflows/    Automated verification
+src/                 Runtime services and security workflows
+showcase/            Guided browser demo, assets, and its tests
+  tests/             Showcase HTTP, isolation, and decision coverage
+tests/               Backend, integration, and frontend tests
+docs/                Current operation and architecture guides
+  archive/           Historical contracts and implementation records
+compose*.yaml        Local service topology and acceptance overlay
+requirements*.lock   Locked runtime and development dependencies
+```
+
+Helio is the synthetic customer company; `helio_*` Python package names and the
+`helio-simulator` Compose project are intentional and remain stable.
+Generated databases, credentials, recordings from new runs, and usage ledgers
+stay outside version control. `showcase/recordings.json` is an intentional,
+labeled synthetic assessment fixture.
+
+Run `make help` for common commands. [Contributing](CONTRIBUTING.md) documents
+maintainer checks and test-driven changes; [SECURITY.md](SECURITY.md) describes
+the evaluation boundary and private reporting. See [docs](docs/README.md) for
+service-specific guides.
 
 ## License and evaluation permission
 

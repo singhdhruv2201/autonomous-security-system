@@ -1,14 +1,16 @@
-# Awasi Product Showcase
+# Autonomous Security System — showcase
 
 Run from the repository root using the Python environment described in the
 [project README](../README.md).
 
 ```sh
-PYTHONPATH=src .venv/bin/python -m showcase.app
+make showcase
 ```
 
 Open [http://127.0.0.1:3070](http://127.0.0.1:3070) and click **Start baseline**.
-The showcase binds to loopback. Docker and the existing Awasi stack are optional.
+The default command uses recorded assessments and disables Slack. It binds to
+loopback; Docker and the existing Awasi stack are optional. See
+[installation and operation](../docs/getting-started.md) for live-mode commands.
 
 | Scenario | What to demonstrate |
 | --- | --- |
@@ -33,8 +35,15 @@ The server’s shutdown removes its temporary session data.
 
 ## Slack alerts
 
+The default `make showcase` command disables Slack even when credentials exist.
+To enable messages with recorded assessments, stop that process and run:
+
+```sh
+PYTHONPATH=.:src .venv/bin/python -m showcase.app --recorded-model
+```
+
 With `SLACK_BOT_TOKEN` and `AWASI_SLACK_CHANNEL` configured in the shell or the
-repo's `.env`, **Run scenario** sends an **Awasi Showcase** alert for the case.
+repo's `.env`, **Run scenario** then sends an **Awasi Showcase** alert for the case.
 The bot must be in the configured channel. The alert includes the validated
 Anthropic assessment and labels it as live or recorded.
 

@@ -1,3 +1,28 @@
+.DEFAULT_GOAL := help
+PYTHON ?= .venv/bin/python
+
+.PHONY: help showcase test-showcase check
+help:
+	@echo "Autonomous Security System"
+	@echo "  make showcase         Start the recorded browser demo (no Slack/API spend)"
+	@echo "  make setup            Generate local Docker credentials"
+	@echo "  make test             Run backend tests"
+	@echo "  make test-showcase    Run showcase tests and JavaScript syntax check"
+	@echo "  make test-ui          Run dashboard JavaScript tests"
+	@echo "  make check            Run all three check groups"
+	@echo "  make test-integration Run backend tests with local Neo4j"
+	@echo "  make stop             Stop the normal Docker stack, preserving data"
+	@echo "  See docs/getting-started.md before enabling live workers or resetting data."
+
+showcase:
+	PYTHONPATH=.:src $(PYTHON) -m showcase.app --no-slack --recorded-model
+
+test-showcase:
+	PYTHONPATH=.:src $(PYTHON) -m pytest -q showcase/tests
+	node --check showcase/static/showcase.js
+
+check: test test-showcase test-ui
+
 .PHONY: setup up stop test agent offboard restore-employee accounts grants audit revoke-agent update-customer \
 	publish-app outsider-view connect-enrichment run-enrichment workbench-status outside-received
 
@@ -12,7 +37,7 @@ stop:
 	docker compose stop
 
 test:
-	.venv/bin/python -m pytest -q
+	$(PYTHON) -m pytest -q
 
 .PHONY: test-ui
 test-ui:
@@ -38,7 +63,7 @@ update-customer:
 
 .PHONY: test-integration
 test-integration:
-	@.venv/bin/python -c 'import os; from pathlib import Path; import pytest; values=dict(line.split("=",1) for line in Path(".env").read_text().splitlines() if "=" in line and not line.lstrip().startswith("#")); os.environ["NEO4J_PASSWORD"]=values["NEO4J_PASSWORD"]; os.environ["NEO4J_TEST_URI"]="bolt://127.0.0.1:7687"; raise SystemExit(pytest.main(["-q"]))'
+	@$(PYTHON) -c 'import os; from pathlib import Path; import pytest; values=dict(line.split("=",1) for line in Path(".env").read_text().splitlines() if "=" in line and not line.lstrip().startswith("#")); os.environ["NEO4J_PASSWORD"]=values["NEO4J_PASSWORD"]; os.environ["NEO4J_TEST_URI"]="bolt://127.0.0.1:7687"; raise SystemExit(pytest.main(["-q"]))'
 
 .PHONY: security-overview security-findings security-connectors security-runs security-sync security-audit security-cases
 security-overview security-findings security-connectors security-runs security-sync security-audit security-cases:
@@ -65,7 +90,7 @@ outside-received:
 
 .PHONY: eval demo-reset
 eval:
-	PYTHONPATH=src .venv/bin/python -m helio_security.evaluation --live
+	PYTHONPATH=src $(PYTHON) -m helio_security.evaluation --live
 
 demo-reset:
-	PYTHONPATH=src .venv/bin/python -m helio_security.demo_reset
+	PYTHONPATH=src $(PYTHON) -m helio_security.demo_reset

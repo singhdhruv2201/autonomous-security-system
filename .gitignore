@@ -6,3 +6,23 @@ __pycache__/
 data/
 work/
 .DS_Store
+
+# Generated state and local development artifacts
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.log
+*.py[cod]
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+node_modules/
+.mypy_cache/
+.ruff_cache/
+.idea/

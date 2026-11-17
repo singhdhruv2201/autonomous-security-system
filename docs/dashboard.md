@@ -1,6 +1,8 @@
 # Awasi dashboard
 
-Open [localhost:3000](http://localhost:3000) after `make setup` and `make up`.
+Open [localhost:3000](http://localhost:3000) after following the
+[Docker startup guide](getting-started.md#3-run-the-full-docker-stack-optional).
+Start the live case worker separately to avoid unintended model calls or messages.
 No token needs to be pasted into the browser. The dashboard runs as a separate
 service on the platform network, outside the simulated customer environment.
 

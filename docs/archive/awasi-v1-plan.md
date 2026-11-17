@@ -1,3 +1,7 @@
+> Historical implementation record. Earlier phase checklists and handoffs are
+> preserved for context and may conflict with later completion notes. Use the
+> [documentation index](../README.md) for current setup and capabilities.
+
 # Awasi v1: one complete find, investigate, fix loop
 
 Status: Phases 0–7 implemented and verified through 2026-11-12; Phase 8 has not started. This file is the canonical copy for handoff; the Cursor plan mirrors it. Phase 0 removed the superseded `implementation-phases.md`, `autonomous-security-plan.md` and `phases-5-6-implementation-status.md`.
@@ -10,9 +14,9 @@ The brief describes five layers: graph, agents, integrations, action platform, e
 
 What is good and worth building on:
 
-- The graph projection in [src/helio_security/graph.py](../src/helio_security/graph.py) is sound. Each source owns its nodes, a node is retired only after a complete snapshot, and missing evidence is never read as "revoked".
-- Finding reconciliation in [src/helio_security/platform_store.py](../src/helio_security/platform_store.py) keeps honest states (open, resolved, unknown) and an event history per finding.
-- The CRM enforces its own grants in one transaction, and already has a reversible "disable principal" operation in [src/helio_crm/access.py](../src/helio_crm/access.py).
+- The graph projection in [src/helio_security/graph.py](../../src/helio_security/graph.py) is sound. Each source owns its nodes, a node is retired only after a complete snapshot, and missing evidence is never read as "revoked".
+- Finding reconciliation in [src/helio_security/platform_store.py](../../src/helio_security/platform_store.py) keeps honest states (open, resolved, unknown) and an event history per finding.
+- The CRM enforces its own grants in one transaction, and already has a reversible "disable principal" operation in [src/helio_crm/access.py](../../src/helio_crm/access.py).
 
 What is wrong:
 
@@ -551,7 +555,7 @@ Update after each phase with date, commit, and the test commands and counts actu
 - Phase 0, cut and reset: **complete — 2026-11-10**. Included in the `Complete Awasi v1 Phase 0 cleanup` commit, based on `f816639`; see Git history for its hash.
 - Phase 1, case loop on the orphaned agent: **complete — 2026-11-10**. See verification section below.
 - Phase 2, Slack: **complete — 2026-11-10**. See verification section below.
-- Phase 3, model, MCP and tracing: **implementation and review fixes verified — 2026-11-11; live Slack acceptance pending**. See the follow-up verification section and `docs/phase3-validation.md`.
+- Phase 3, model, MCP and tracing: **implementation and review fixes verified — 2026-11-11; live Slack acceptance pending**. See the follow-up verification section and `docs/model-operations.md`.
 - Phase 4, workbench and outside: not started
 - Phase 5, graph, rules and workbench playbooks: implemented; local validation recorded below, live Slack acceptance pending
 - Phase 6, dashboard: **verified — 2026-11-12; live Slack timeline comparison completed in Phase 7**. See verification below.
@@ -904,7 +908,7 @@ Validation (all local and unpaid):
   for validation and stopped afterward without deleting volumes.
 - No Claude requests or Slack messages were sent. Historical live usage was not
   reset or modified. The complete live Slack acceptance remains pending; see
-  `docs/phase3-validation.md` for configuration and the accounting prerequisite.
+  `docs/model-operations.md` for configuration and the accounting prerequisite.
 
 ### Phase 4 implementation — 2026-11-11
 
@@ -1014,7 +1018,7 @@ Validation includes both complete local scenarios through HTTP inventories,
 Neo4j, the observation worker, the case worker, real MCP subprocesses, and Slack
 callbacks with a fake transport. Control fixtures remain silent. Live Slack
 channel delivery and paid model calls were not exercised. The deferred Phase 4
-items remain in `docs/fixes.md`; dashboard changes remain Phase 6.
+items remain in `docs/known-limitations.md`; dashboard changes remain Phase 6.
 
 Final validation: the full Python suite with real Neo4j enabled completed with
 **763 passed, 1 skipped** (the opt-in live model test). `docker compose config

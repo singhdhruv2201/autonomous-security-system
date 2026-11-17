@@ -4,39 +4,44 @@ Neo4j belongs to the security platform. The simulator represents the customer
 environment. The security API and worker are now implemented; see the
 [backend workflow](backend.md). The [dashboard](dashboard.md) calls that backend
 through a server-side gateway. It does not connect directly to the graph database
-or carry CRM administration credentials. Slack integration remains future work.
+or carry CRM administration credentials. Slack decisions and remediation run in the separate case worker; see
+[architecture](architecture.md).
 
 ```mermaid
 flowchart LR
     subgraph Customer[Helio customer environment]
         Directory[Directory API and SQLite]
         CRM[CRM API and SQLite]
+        Workbench[Workbench API and SQLite]
         Agent[Sales Research Agent] -->|customer read grant| CRM
     end
     subgraph Platform[Security platform]
         Connectors[Read-only API connectors] --> Graph[(Neo4j)]
-        Graph --> Rule[Inactive owner access rule]
+        Graph --> Rule[Three deterministic access rules]
         Rule --> Backend[Security API]
         Dashboard[Dashboard gateway :3000] --> Backend
     end
     Directory -->|complete directory snapshot| Connectors
     CRM -->|observer metadata snapshot| Connectors
+    Workbench -->|apps, agents and destinations| Connectors
 ```
 
 The services use separate customer and platform Compose networks and data volumes.
-Only the security API/worker joins both networks. It has no customer database
-mounts and uses only the observer token for CRM metadata. It cannot edit
-customers or revoke access through the CRM. Neo4j and both source APIs publish
-only to localhost.
+The security API/observation worker and the separate case worker join both networks.
+Neither mounts customer databases. Observation uses read credentials; the case
+worker has separate scoped action credentials for approved workflows. Neo4j and
+source API ports bind to localhost.
 
 ## Run and inspect
 
+Start the services using the [Docker guide](getting-started.md#3-run-the-full-docker-stack-optional),
+which explains when live workers and credentials are required. Then inspect them:
+
 ```sh
 make setup              # Add missing credentials; preserve existing values
-make up                 # Start directory, CRM, Neo4j and preserve data volumes
 make security-sync      # Queue an observation; inspect completion with security-runs
 make security-overview  # Counts, source freshness and current findings
-make security-findings  # Inactive owners whose agents retain sensitive access
+make security-findings  # Current findings across configured rules
 ```
 
 Open http://localhost:7474/browser/, connect to `bolt://localhost:7687`, and use
@@ -68,29 +73,35 @@ the [dashboard](http://localhost:3000/#graph), with entity inspection and filter
 | Node | Source | Meaning |
 | --- | --- | --- |
 | Employee / Team | Directory | Employment status and membership |
-| App | CRM | Helio CRM and its declared owner |
-| AppAccount | CRM | CRM employee identity linked to its directory employee |
-| Agent | CRM | Sales Research Agent, owned by Maya |
-| ServiceAccount | CRM | CRM administrator and security observer, owned by Casey |
-| DataResource | CRM | Customer database (confidential) and access metadata (internal) |
+| App | CRM / Workbench | CRM and internal apps, ownership and visibility |
+| AppAccount | CRM | CRM identity linked to its directory employee |
+| Agent | CRM / Workbench | Automated principals and their ownership |
+| ServiceAccount | CRM | Administration, observation and other service identities |
+| DataResource | CRM | Logical data resources and their classification |
 | AccessGrant | CRM | Principal, scopes, target, active/revoked status and version |
+| Connection / Destination | Workbench | Agent connections and destination approval metadata |
+| Audience | Workbench | Public exposure of an internal app |
 | Source | Platform | Last attempt, last success and connector health |
 
-Relationships: `MEMBER_OF`, `IDENTITY_OF`, `OWNS`, `USES`, `STORES`, `HAS_GRANT`,
-and `ON`. An app's `STORES` edge describes its resource; customer rows are never
-copied. The two resources are logical metadata records for the existing CRM,
-not two new applications or a completed eight-app simulator.
+Relationships include `MEMBER_OF`, `IDENTITY_OF`, `OWNS`, `USES`, `STORES`,
+`HAS_GRANT`, `ON`, `ACTS_AS`, `EXPOSED_TO`, `HAS_CONNECTION`, and `TO`.
+An app's `STORES` edge describes its logical resource; customer rows are never
+copied. Workbench relationships connect internal apps and agents to CRM principals,
+public audiences, and external destinations.
 
-With the current fixtures, there are **54 entity nodes, 2 source nodes and 75
-relationships**: 20 employees, 5 teams, 1 app, 20 app accounts, 1 agent,
-2 service accounts, 2 resources and 3 grants.
+Inventory counts depend on the configured sources and current demo state. Use
+`make security-overview` for observed counts rather than assuming a fixed fixture
+size. The dashboard groups CRM accounts under their people while retaining the
+underlying identity relationships.
 
 ## Synchronization contract
 
 - Directory `GET /snapshot` reads teams and employees in one SQLite transaction.
 - CRM `GET /inventory` reads app/resources/accounts/grants in one transaction,
   authorized by an active observer metadata grant or an administrator.
-- Both declare `schema_version: 1`, `company_id: helio`, and `complete: true`.
+- Workbench `GET /inventory` supplies apps, agents, connections and destinations
+  using its observer credential.
+- Sources declare `schema_version: 1`, `company_id: helio`, and `complete: true`.
   Missing fields, unsupported versions, duplicate IDs, and invalid internal
   references reject the whole source observation.
 - Connectors make bounded, read-only HTTP requests. They refuse redirects and
@@ -112,7 +123,7 @@ relationships**: 20 employees, 5 teams, 1 app, 20 app accounts, 1 agent,
 The v1 local configuration synchronizes every 15 seconds (60-second fallback).
 Use `make security-sync` to queue a refresh and update persistent findings.
 Reads are atomic within each
-source, not across both sources. Each source's observation time stays visible.
+source, not across all sources. Each source's observation time stays visible.
 
 ## Demonstrated security value
 
@@ -128,7 +139,7 @@ the revocation and clears that finding. Graph edits do not enforce CRM access.
 If the existing CRM grant is already revoked, that finding correctly stays
 absent. Do not reset the environment merely to force a risk to appear. Isolated
 integration tests exercise the entire lifecycle without changing Helio's data.
-An empty findings list evaluates this one rule only. It does not establish that
+An empty findings list describes the configured rules only. It does not establish that
 the company is secure, particularly when `coverage_complete` is false.
 
 ## Tests and current limits

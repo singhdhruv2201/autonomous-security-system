@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "helio-simulator"
 version = "0.1.0"
-description = "Synthetic company directory for the Helio security simulator"
+description = "Autonomous security prototype with a synthetic Helio environment and verified remediation"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1",

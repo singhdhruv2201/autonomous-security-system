@@ -142,7 +142,7 @@ outbox entry; successful metadata/audit reads enter only the operational stream.
 Both streams correlate with legacy audit request IDs and the HTTP lifecycle.
 HTTP requests also record received, prepared response and completion metadata.
 See the [current capture and delivery guide](activity-delivery.md) and historical
-[phase-0/1 activity contract](crm-activity-contract.md).
+[phase-0/1 activity contract](archive/crm-activity-contract-v1.md).
 
 Business changes, legacy audit, activity event and pending delivery commit together.
 Rejected partial writes roll back before the denial is recorded. An unusable
@@ -237,12 +237,14 @@ in its ignored `.env`:
 | `CRM_RECORD_LIMIT` | Default 100 prepared disclosures per rolling 60 seconds; repeated reads count again |
 | `CRM_BULK_LIMIT` | Default blocks a single result of 50 or more records |
 
-Apply changes with `make up`. The dashboard now shows only the inactive-owner
-observation rule and its graph coverage. CRM decisions remain in Activity evidence,
-without opening new activity incidents. `make setup` still provides the CRM publisher
-credential until Phase 8, but the security service no longer receives it. Existing
-schemas, grants and history remain intact when upgrading; only an explicitly
-requested demo-volume reset clears them.
+Recreate the CRM service after changing these settings; see the
+[Docker guide](getting-started.md#3-run-the-full-docker-stack-optional) for startup
+and credential requirements. These optional request checks are separate from the
+three graph-based detection rules shown in the dashboard. CRM decisions remain
+in Activity evidence without opening new activity incidents. The publisher
+credential supports the optional activity pipeline; it is not a graph observer
+credential. Existing schemas, grants and history remain intact when upgrading;
+an explicit demo-volume reset clears them.
 
 The shared transactional rolling-event store serializes competing requests. Record
 reservations remain charged after a disconnect or lost response; delivery evidence
