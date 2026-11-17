@@ -1,0 +1,71 @@
+AWASI FOUNDERS EVALUATION LICENSE
+Version 1.0 — November 16, 2026
+
+Copyright (c) 2026 Dhruv Singh. All rights reserved except as expressly stated below.
+
+1. Scope and ownership
+
+This license applies to the original code, documentation, and other material
+provided by Dhruv Singh in this repository (the "Material"). It is a proprietary
+evaluation license, not an open-source license. Ownership remains with the
+respective rights holders; no ownership is transferred by sharing this repository.
+
+2. Limited permission for Awasi's founders
+
+Dhruv Singh grants the founders of Awasi, the company identified by awasi.ai
+(the "Authorized Evaluators"), a non-exclusive, non-transferable, non-sublicensable
+permission to download, make private local copies of, execute, test, and locally
+modify the Material solely to evaluate this prototype and its engineering work.
+Authorized Evaluators may discuss their evaluation and provide feedback to the
+author. Evaluation must use synthetic or otherwise lawfully controlled test data,
+not a production deployment. Copyright and license notices must be retained in
+copies and modifications.
+
+This permission does not extend automatically to other employees, contractors,
+affiliates, or third parties. Additional evaluators require the author's prior
+written permission.
+
+3. Reserved uses
+
+Except for the limited evaluation permission above, rights required by applicable
+law, rights previously granted, and the platform rights described below, no
+permission is granted to use, execute, copy, modify, distribute, sublicense, sell,
+host, or incorporate the Material into another product or service. In particular,
+production operation, commercial exploitation, and distribution of the Material
+or derivative works require a separate written agreement with the author.
+
+Access to the repository is not a grant of general permission to reuse the Material.
+People who are not Authorized Evaluators have no execution or reuse permission
+under this license. Requests for additional permission may be directed to
+Dhruv Singh through https://github.com/singhdhruv2201 or the correspondence by
+which the repository was shared.
+
+4. GitHub, third-party material, and names
+
+Nothing in this license restricts rights granted to GitHub or its users under
+GitHub's applicable Terms of Service, including public viewing and platform-
+supported forking, or any non-waivable rights under applicable law. These terms
+do not revoke permissions already granted under another applicable license.
+
+Third-party software, dependencies, and separately identified third-party material
+remain subject to their own licenses. This license grants no rights the author
+does not hold and does not replace those third-party terms. No trademark rights
+are granted. References to Awasi identify the intended evaluators and do not imply
+affiliation, endorsement, or authorship by Awasi.
+
+5. Termination
+
+The evaluation permission ends upon a material breach of these terms. Following
+termination, use under this license must stop and evaluation copies and local
+modifications must be deleted, except to the extent retention is required by law
+or independently permitted by rights preserved in section 4.
+
+6. No warranty; limitation of liability
+
+THE MATERIAL IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW,
+THE AUTHOR AND OTHER RIGHTS HOLDERS ARE NOT LIABLE FOR CLAIMS, DAMAGES, OR OTHER
+LIABILITY ARISING FROM THE MATERIAL OR ITS USE, WHETHER IN CONTRACT, TORT, OR
+OTHERWISE. THE MATERIAL IS A PROTOTYPE AND IS NOT OFFERED AS A PRODUCTION SECURITY
+SERVICE.
