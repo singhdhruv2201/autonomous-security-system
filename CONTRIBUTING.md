@@ -1,6 +1,7 @@
 # Maintainer and evaluator guide
 
-This is a private evaluation repository, not an open-source contribution program.
+This repository is publicly viewable under a proprietary evaluation license,
+not an open-source contribution program.
 Access and modifications are governed by [LICENSE](LICENSE). Awasi's authorized
 founders may evaluate it; additional contributors need the owner's permission.
 

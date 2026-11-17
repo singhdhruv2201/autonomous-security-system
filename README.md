@@ -10,9 +10,11 @@ an official Awasi release or a production deployment.
 [run the full stack](docs/getting-started.md#3-run-the-full-docker-stack-optional) ·
 [future scope](#future-scope-not-yet-built)
 
-**Private evaluation repository, not open source.** Awasi's founders have limited
-evaluation permission under the [Proprietary Evaluation License](LICENSE).
-Repository access is by invitation; other use requires written permission.
+**Publicly viewable, not open source. All rights reserved.** Awasi's founders
+have limited evaluation permission under the [Proprietary Evaluation License](LICENSE).
+Other execution, modification, redistribution, commercial use, or incorporation
+into another product requires written permission, except for rights preserved by
+the license. Public availability does not grant general reuse permission.
 
 ## What the product does
 
@@ -75,8 +77,9 @@ reasoning. The showcase's local graph does not demonstrate Neo4j operation.
 
 ## Run the showcase
 
-Accept your private GitHub invitation first. Use Python 3.11 and run from the
-repository root. This walkthrough needs no Docker, Slack credentials, or API keys.
+The repository can be viewed without an invitation. The following execution steps
+are for authorized evaluators under the [license](LICENSE). Use Python 3.11 and run
+from the repository root. This walkthrough needs no Docker, Slack credentials, or API keys.
 
 ```sh
 git clone https://github.com/singhdhruv2201/autonomous-security-system.git
@@ -157,11 +160,12 @@ Copyright © 2026 Dhruv Singh. Original repository material is provided under th
 [Awasi Founders Evaluation License](LICENSE), a proprietary, non-open-source
 license. Awasi's founders may run and make local modifications solely to evaluate
 this prototype. Production use, incorporation into another product, redistribution,
-and access for additional evaluators require separate written permission.
+and evaluation by anyone else require separate written permission.
 
-GitHub invitations control repository access; the license defines permitted use.
-It does not override applicable third-party licenses or rights granted through
+Public visibility allows viewing and GitHub-supported forking; it does not grant
+general reuse permission. The license does not override applicable third-party
+licenses or rights granted through
 [GitHub's Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service).
-Contact [Dhruv Singh](https://github.com/singhdhruv2201) for access or additional
+Contact [Dhruv Singh](https://github.com/singhdhruv2201) for additional
 permission. Awasi names are used to identify the intended recipient; no affiliation,
 endorsement, or trademark license is implied.

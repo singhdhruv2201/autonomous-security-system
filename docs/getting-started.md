@@ -7,8 +7,9 @@ JavaScript checks. Installation and execution are subject to the [license](../LI
 
 ### 1. Run the browser showcase (recommended)
 
-Accept your GitHub repository invitation and authenticate Git on your machine
-before cloning this private repository.
+No invitation is needed to view or clone this public repository. Running or
+modifying it requires the evaluation permission in the [license](../LICENSE) or
+separate written authorization from the owner.
 
 ```sh
 git clone https://github.com/singhdhruv2201/autonomous-security-system.git
